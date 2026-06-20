@@ -19,8 +19,8 @@ export const login = createHandler(async (req, res) => {
   try {
     const response = await svc.authenticate(body.memberId, body.password);
     setAuthCookie(res, response.token);
-    const { token: _t, ...safe } = response;
-    res.status(200).json(safe);
+    // Include token for cross-origin frontends (Netlify + Koyeb) where cookies are not sent.
+    res.status(200).json(response);
   } catch (e) {
     if (e instanceof AppError && e.status === 400) {
       throw AppError.unauthorized(e.message);

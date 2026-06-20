@@ -20,9 +20,10 @@ export function parseCookieHeader(header: string | undefined): Record<string, st
 export function setAuthCookie(res: Response, token: string): void {
   const secure = isProduction ? "; Secure" : "";
   const sameSite = isProduction ? "None" : "Lax";
+  const partitioned = isProduction ? "; Partitioned" : "";
   res.setHeader(
     "Set-Cookie",
-    `${AUTH_COOKIE}=${encodeURIComponent(token)}; HttpOnly; Path=/; Max-Age=${SEVEN_DAYS_SEC}; SameSite=${sameSite}${secure}`
+    `${AUTH_COOKIE}=${encodeURIComponent(token)}; HttpOnly; Path=/; Max-Age=${SEVEN_DAYS_SEC}; SameSite=${sameSite}${secure}${partitioned}`
   );
 }
 
