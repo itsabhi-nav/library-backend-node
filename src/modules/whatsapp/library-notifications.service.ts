@@ -15,6 +15,8 @@ import {
 export interface CreatedInvoiceNotify {
   userId: number;
   amount: number;
+  dueDate: string;
+  pendingAmount?: number;
 }
 
 export async function notifyFeesGenerated(
@@ -29,11 +31,13 @@ export async function notifyFeesGenerated(
     const user = await loadMemberUser(inv.userId);
     if (!user) continue;
     const amountStr = formatINRAmount(inv.amount);
+    const pending = inv.pendingAmount ?? inv.amount;
     const variables = {
       "1": String(user.full_name).trim(),
       "2": monthLabel,
       "3": amountStr,
-      "4": amountStr,
+      "4": formatINRAmount(pending),
+      "5": formatDateShortIST(inv.dueDate),
     };
 
     if (hasReachablePhone(user)) {

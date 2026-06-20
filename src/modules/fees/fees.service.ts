@@ -77,7 +77,7 @@ export async function generateForMonth(year: number, month: number) {
   const subs = await repo.findActiveSubscriptionsOverlappingMonth(start, end);
   let created = 0;
   let skipped = 0;
-  const createdForNotify: { userId: number; amount: number }[] = [];
+  const createdForNotify: { userId: number; amount: number; dueDate: string }[] = [];
 
   for (const sub of subs) {
     if (!sub.plan_id_ref && !sub.plan_id) {
@@ -101,7 +101,7 @@ export async function generateForMonth(year: number, month: number) {
         dueDate,
       });
       created++;
-      createdForNotify.push({ userId, amount: Number(sub.plan_price) });
+      createdForNotify.push({ userId, amount: Number(sub.plan_price), dueDate });
     } catch (e: any) {
       if (e?.code === "23505") skipped++;
       else throw e;
@@ -127,7 +127,7 @@ export async function runAutoFeeGenerationForToday() {
   const subs = await repo.findActiveMemberSubscriptions();
   let created = 0;
   let skipped = 0;
-  const createdForNotify: { userId: number; amount: number }[] = [];
+  const createdForNotify: { userId: number; amount: number; dueDate: string }[] = [];
 
   for (const sub of subs) {
     const startDate = String(sub.start_date).substring(0, 10);
@@ -154,7 +154,7 @@ export async function runAutoFeeGenerationForToday() {
         dueDate,
       });
       created++;
-      createdForNotify.push({ userId, amount: Number(sub.plan_price) });
+      createdForNotify.push({ userId, amount: Number(sub.plan_price), dueDate });
     } catch (e: any) {
       if (e?.code === "23505") skipped++;
       else throw e;

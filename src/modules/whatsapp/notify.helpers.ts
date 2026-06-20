@@ -1,5 +1,5 @@
 import { SimpleDatabase } from "../../core/database/SimpleDatabase";
-import { whatsappConfig, SCOPE_KEY, newBatchId } from "./whatsapp.config";
+import { whatsappConfig, SCOPE_KEY, newBatchId, formatPhone } from "./whatsapp.config";
 import * as queue from "./queue.service";
 import { processQueuedMessages } from "./whatsapp.service";
 
@@ -31,8 +31,8 @@ export async function getAdminPhoneNumbers(): Promise<string[]> {
   const raw = String(res.rows[0]?.config_value ?? "");
   return raw
     .split(",")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+    .map((s) => formatPhone(s.trim()))
+    .filter((s) => s.length >= 10);
 }
 
 export async function loadMemberUser(userId: number) {

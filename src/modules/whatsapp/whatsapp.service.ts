@@ -1,7 +1,8 @@
 import axios from "axios";
 import { logger } from "../../config/logger";
 import { SimpleDatabase } from "../../core/database/SimpleDatabase";
-import { whatsappConfig, formatPhone, buildTemplateComponents, newBatchId, SCOPE_KEY } from "./whatsapp.config";
+import { whatsappConfig, formatPhone, newBatchId, SCOPE_KEY } from "./whatsapp.config";
+import { buildTemplateComponents } from "./template-components";
 import * as queue from "./queue.service";
 
 let consecutiveFailures = 0;
@@ -57,7 +58,7 @@ async function sendDirect(
   }
 
   const formattedPhone = formatPhone(phone);
-  const components = buildTemplateComponents(variables);
+  const components = await buildTemplateComponents(templateName, lang, scope, variables);
   const url = `${whatsappConfig.baseUrl}/${whatsappConfig.apiVersion}/${whatsappConfig.phoneNumberId}/messages`;
 
   const payload = {
@@ -177,7 +178,7 @@ export async function retryExistingMessage(
     template: {
       name: templateName,
       language: { code: lang },
-      components: buildTemplateComponents(variables),
+      components: await buildTemplateComponents(templateName, lang, scope, variables),
     },
   };
 

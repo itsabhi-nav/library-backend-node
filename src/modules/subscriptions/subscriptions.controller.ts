@@ -43,7 +43,14 @@ export const createSubscription = createHandler(async (req, res) => {
 
 export const getActiveSubscription = createHandler(async (req, res) => {
   const sub = await svc.getActiveSubscription(req.user!.userId);
-  if (!sub) throw AppError.notFound("No active subscription found");
+  if (!sub) {
+    const role = req.user!.role;
+    if (role === "ADMIN" || role === "LIBRARIAN") {
+      res.status(200).json(null);
+      return;
+    }
+    throw AppError.notFound("No active subscription found");
+  }
   res.status(200).json(sub);
 });
 

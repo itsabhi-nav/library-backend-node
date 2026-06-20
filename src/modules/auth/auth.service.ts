@@ -120,7 +120,7 @@ export async function registerStudent(input: StudentRegisterInput) {
     const user = insertRes.rows[0];
 
     let planName = "No plan";
-    let registrationFeeNotify: { userId: number; amount: number; year: number; month: number } | null = null;
+    let registrationFeeNotify: { userId: number; amount: number; year: number; month: number; dueDate: string } | null = null;
     if (input.planId != null) {
       const planRes = await client.query(
         `SELECT id, duration_days, price, name FROM membership_plans WHERE id = $1`,
@@ -134,9 +134,9 @@ export async function registerStudent(input: StudentRegisterInput) {
       const subRes = await client.query(
         `INSERT INTO subscriptions (user_id, plan_id, start_date, end_date, status,
                                     paid_amount, payment_method, payment_status)
-         VALUES ($1, $2, $3, $4, 'ACTIVE', $5, $6, 'PAID')
+         VALUES ($1, $2, $3, $4, 'ACTIVE', 0, $5, 'PENDING')
          RETURNING id`,
-        [user.id, plan.id, start, end, plan.price, input.paymentMethod ?? "CASH"]
+        [user.id, plan.id, start, end, input.paymentMethod ?? "CASH"]
       );
       const subscriptionId = Number(subRes.rows[0].id);
       const year = parseInt(start.substring(0, 4), 10);
@@ -157,8 +157,8 @@ export async function registerStudent(input: StudentRegisterInput) {
           amount: Number(plan.price),
           planName: planName,
           dueDate,
-          status: "PAID",
-          amountPaid: Number(plan.price),
+          status: "PENDING",
+          amountPaid: 0,
         },
         client
       );
@@ -167,6 +167,7 @@ export async function registerStudent(input: StudentRegisterInput) {
         amount: Number(plan.price),
         year,
         month,
+        dueDate,
       };
     }
 
@@ -189,7 +190,11 @@ export async function registerStudent(input: StudentRegisterInput) {
   if (result.registrationFeeNotify) {
     const { notifyFeesGenerated } = await import("../whatsapp/library-notifications.service");
     void notifyFeesGenerated(
-      [{ userId: result.registrationFeeNotify.userId, amount: result.registrationFeeNotify.amount }],
+      [{
+        userId: result.registrationFeeNotify.userId,
+        amount: result.registrationFeeNotify.amount,
+        dueDate: result.registrationFeeNotify.dueDate,
+      }],
       result.registrationFeeNotify.year,
       result.registrationFeeNotify.month
     ).catch(() => {});
