@@ -1,11 +1,13 @@
 import { createHandler } from "../../core/http/createHandler";
 import { AppError } from "../../core/errors/AppError";
-import { isProduction } from "../../config/env";
+import { env, isProduction } from "../../config/env";
+import { logger } from "../../config/logger";
 import { authenticate } from "../../middlewares/authMiddleware";
 import { requireAdmin, requireAdminOrLibrarian } from "../../middlewares/requireRole";
 import { whatsappConfig } from "./whatsapp.config";
 import * as dashboard from "./dashboard.service";
 import { sendAdmissionConfirmation, TEMPLATE_NAME } from "./admission.service";
+import { processWebhookEvent } from "./whatsapp.service";
 
 export const getMessages = createHandler(async (req, res) => {
   const page = parseInt(String(req.query.page ?? "1"), 10) || 1;
@@ -37,6 +39,36 @@ export const testAdmission = createHandler(async (req, res) => {
   const userId = req.body?.userId != null ? Number(req.body.userId) : null;
   await sendAdmissionConfirmation(memberName, phoneNumber, userId);
   res.status(200).json({ message: "Admission WhatsApp queued", template: TEMPLATE_NAME });
+});
+
+// ── Meta webhook (public — no auth) ─────────────────────────────────────────
+
+// GET: Meta calls this once to verify the callback URL during setup. Echo back
+// hub.challenge only when the verify token matches ours.
+export const verifyWebhook = createHandler(async (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+  const verifyToken = env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
+
+  if (mode === "subscribe" && verifyToken && token === verifyToken) {
+    logger.info("WhatsApp webhook verified");
+    res.status(200).send(String(challenge ?? ""));
+    return;
+  }
+  logger.warn({ mode }, "WhatsApp webhook verification failed");
+  res.status(403).json({ success: false, message: "Forbidden" });
+});
+
+// POST: Meta delivers message status updates (sent/delivered/read/failed) here.
+// Always ack 200 quickly so Meta doesn't retry/disable the subscription.
+export const processWebhook = createHandler(async (req, res) => {
+  try {
+    await processWebhookEvent(req.body);
+  } catch (e: any) {
+    logger.error({ err: e?.message }, "WhatsApp webhook processing failed");
+  }
+  res.status(200).json({ success: true });
 });
 
 export { authenticate, requireAdmin, requireAdminOrLibrarian };

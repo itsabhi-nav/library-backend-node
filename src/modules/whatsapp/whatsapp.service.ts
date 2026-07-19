@@ -201,4 +201,66 @@ export async function cleanupOldQueueMessages(daysOld: number) {
   return queue.cleanupOldQueueMessages(daysOld);
 }
 
+// ── Meta status webhook ─────────────────────────────────────────────────────
+// A successful send only means Meta *accepted* the message ('sent'). The real
+// lifecycle (delivered / read / failed) arrives asynchronously on the webhook.
+// Without consuming it, every row is stuck at 'sent' even when the phone never
+// received it. This processes those callbacks and reconciles the true status.
+
+/** Apply a single Meta status object to its matching message row. */
+async function updateMessageStatus(status: any): Promise<void> {
+  const messageId = status?.id;
+  const newStatus = status?.status; // sent | delivered | read | failed
+  if (!messageId || !newStatus) return;
+
+  // Meta attaches an errors[] array on a failed status.
+  const err = Array.isArray(status.errors) ? status.errors[0] : null;
+  const failureReason = err
+    ? `${err.code ?? ""} ${err.title ?? ""}${err.message ? " — " + err.message : ""}`.trim()
+    : null;
+
+  try {
+    const res = await SimpleDatabase.query(
+      // Never downgrade a message (read is terminal; don't drop delivered→sent),
+      // but always allow a terminal 'failed' to be recorded.
+      `UPDATE whatsapp_messages
+       SET message_status = CASE
+             WHEN message_status = 'read' THEN 'read'
+             WHEN message_status = 'delivered' AND $1 = 'sent' THEN 'delivered'
+             ELSE $1 END,
+           delivered_at = CASE WHEN $1 IN ('delivered', 'read') AND delivered_at IS NULL THEN NOW() ELSE delivered_at END,
+           read_at = CASE WHEN $1 = 'read' AND read_at IS NULL THEN NOW() ELSE read_at END,
+           failed_at = CASE WHEN $1 = 'failed' AND failed_at IS NULL THEN NOW() ELSE failed_at END,
+           failure_reason = CASE WHEN $1 = 'failed' THEN COALESCE($3, failure_reason) ELSE failure_reason END,
+           updated_at = NOW()
+       WHERE message_id = $2`,
+      [newStatus, messageId, failureReason]
+    );
+    if (res.rowCount === 0) {
+      logger.warn({ messageId, newStatus }, "WhatsApp webhook status: message_id not found");
+    } else {
+      logger.info({ messageId, newStatus, failureReason }, "WhatsApp message status updated via webhook");
+    }
+  } catch (e: any) {
+    logger.error({ err: e?.message, messageId }, "Failed to update WhatsApp message status from webhook");
+  }
+}
+
+/** Handle a full Meta webhook payload (status updates + inbound messages). */
+export async function processWebhookEvent(event: any): Promise<void> {
+  const entries = Array.isArray(event?.entry) ? event.entry : [];
+  for (const entry of entries) {
+    const changes = Array.isArray(entry?.changes) ? entry.changes : [];
+    for (const change of changes) {
+      if (change?.field !== "messages") continue;
+      const statuses = change?.value?.statuses;
+      if (Array.isArray(statuses)) {
+        for (const status of statuses) {
+          await updateMessageStatus(status);
+        }
+      }
+    }
+  }
+}
+
 export { whatsappConfig };
