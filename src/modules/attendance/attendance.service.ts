@@ -2,8 +2,8 @@ import { AppError } from "../../core/errors/AppError";
 import { SimpleDatabase } from "../../core/database/SimpleDatabase";
 import { evaluateAndAward } from "../achievements/achievements.service";
 import { toIsoOrNull } from "../../shared/serializers";
-import { istToday, istDateFromInstant } from "../../shared/ist";
-import { parseTimeToMinutes } from "../../shared/shift-utils";
+import { istToday, istDateFromInstant, istMinutesOfDay } from "../../shared/ist";
+import { parseTimeToMinutes, formatShiftTime12h } from "../../shared/shift-utils";
 import { findByMemberId } from "../auth/auth.service";
 import {
   notifyPunchInIfNeeded,
@@ -72,12 +72,52 @@ function toStatus(
   };
 }
 
+/**
+ * A member may punch in only during their subscribed shift window(s). If no shift
+ * can be resolved (member has no active plan/shift), we don't block. Throws a
+ * clear, user-facing error listing the allowed hours when outside the window.
+ */
+async function assertWithinShiftHours(userId: number): Promise<void> {
+  const res = await SimpleDatabase.query(
+    `SELECT s.start_time, s.end_time
+       FROM subscriptions sub
+       JOIN membership_plans mp ON mp.id = sub.plan_id
+       JOIN shifts s ON s.id = mp.shift_id
+      WHERE sub.user_id = $1 AND sub.status = 'ACTIVE'
+        AND CURRENT_DATE BETWEEN sub.start_date AND sub.end_date
+        AND s.is_active <> false`,
+    [userId]
+  );
+  const windows = res.rows.filter((r: any) => r.start_time && r.end_time);
+  if (windows.length === 0) return; // no shift to enforce
+
+  const nowMin = istMinutesOfDay();
+  const withinAny = windows.some((s: any) => {
+    const start = parseTimeToMinutes(String(s.start_time));
+    const end = parseTimeToMinutes(String(s.end_time));
+    return nowMin >= start && nowMin < end;
+  });
+  if (withinAny) return;
+
+  const label = windows
+    .map(
+      (s: any) =>
+        `${formatShiftTime12h(String(s.start_time))} – ${formatShiftTime12h(String(s.end_time))}`
+    )
+    .join(" or ");
+  throw AppError.badRequest(
+    `You can punch in only during your shift hours: ${label}.`
+  );
+}
+
 export async function checkIn(memberId: string) {
   const user = await findByMemberId(memberId);
   if (!user) throw AppError.badRequest(`User with member ID ${memberId} not found`);
 
   const active = await repo.findActiveAttendanceByUserId(Number(user.id));
   if (active) return loadAttendanceJson(active);
+
+  await assertWithinShiftHours(Number(user.id));
 
   const booking = await repo.findActiveBookingsForUserOnDate(Number(user.id), istToday());
   const row = await repo.insertAttendance(Number(user.id), booking ? Number(booking.id) : null);
@@ -115,6 +155,8 @@ export async function punchInSelf(userId: number) {
   if (active) {
     return toStatus(true, active.check_in_time, seat);
   }
+
+  await assertWithinShiftHours(userId);
 
   const booking = await repo.findActiveBookingsForUserOnDate(userId, istToday());
   const saved = await repo.insertAttendance(userId, booking ? Number(booking.id) : null);
