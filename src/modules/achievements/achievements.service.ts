@@ -141,23 +141,26 @@ export async function evaluateAndAward(userId: number) {
 }
 
 async function syncAchievementWhatsAppNotifications(userId: number) {
-  const { notifyAchievementUnlocked } = await import("../whatsapp/library-notifications.service");
-  const { TEMPLATES } = await import("../whatsapp/notify.helpers");
+  const { notifyAchievementsUnlockedBatch } = await import("../whatsapp/library-notifications.service");
   const definitions = await repo.findActiveDefinitions();
-  const missing = await repo.findAchievementsMissingWhatsApp(userId, TEMPLATES.ACHIEVEMENT);
-  if (missing.length === 0) return;
+  const pending = await repo.findAchievementsNeedingWhatsApp(userId);
+  if (pending.length === 0) return;
 
   const earnedCount = (await repo.findEarnedDefinitionIds(userId)).size;
   const totalCount = definitions.length;
-  for (const badge of missing) {
-    await notifyAchievementUnlocked(
-      userId,
-      badge.title,
-      badge.description,
-      earnedCount,
-      totalCount
-    );
-  }
+
+  // ONE combined WhatsApp message for every not-yet-notified badge (names joined
+  // by commas) instead of one per badge — avoids Meta's marketing frequency cap.
+  await notifyAchievementsUnlockedBatch(
+    userId,
+    pending.map((b: any) => String(b.title)),
+    pending.map((b: any) => String(b.description ?? "")),
+    earnedCount,
+    totalCount
+  );
+
+  // Mark notified regardless of delivery outcome: a single attempt, never re-spam.
+  await repo.markAchievementsNotified(pending.map((b: any) => Number(b.id)));
 }
 
 export async function getUserAchievements(userId: number) {

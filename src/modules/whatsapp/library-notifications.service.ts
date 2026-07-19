@@ -112,20 +112,34 @@ export async function runFeeReminders(): Promise<number> {
   return recipients.length;
 }
 
-export async function notifyAchievementUnlocked(
+/**
+ * Send ONE combined "Achievement Unlocked" message covering every newly-earned
+ * badge (names comma-separated), instead of one message per badge. The template
+ * is a MARKETING category, so multiple rapid sends to the same member trip Meta's
+ * per-user frequency cap (131049) and all but the first fail. Batching keeps it to
+ * a single message.
+ */
+export async function notifyAchievementsUnlockedBatch(
   userId: number,
-  title: string,
-  description: string,
+  titles: string[],
+  descriptions: string[],
   earnedCount: number,
   totalCount: number
 ): Promise<void> {
+  if (titles.length === 0) return;
   const user = await loadMemberUser(userId);
   if (!user) return;
 
+  const titleList = titles.join(", ");
+  const detail =
+    titles.length === 1
+      ? descriptions[0]?.trim() || ""
+      : `You unlocked ${titles.length} new badges — keep it up!`;
+
   await sendToMemberIfConsent(userId, TEMPLATES.ACHIEVEMENT, {
     "1": String(user.full_name).trim(),
-    "2": title,
-    "3": description,
+    "2": titleList,
+    "3": detail,
     "4": String(earnedCount),
     "5": String(totalCount),
   });

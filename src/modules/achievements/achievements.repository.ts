@@ -41,34 +41,30 @@ export async function findLatestAchievement(userId: number) {
   return res.rows[0] ?? null;
 }
 
-export async function findAchievementsMissingWhatsApp(userId: number, templateName: string) {
-  // Each earned badge gets AT MOST ONE WhatsApp attempt. We deliberately match on
-  // ANY prior message row (sent OR failed), not just 'sent'. Achievement messages
-  // are a MARKETING template — if a send fails (e.g. Meta error 131049, the per-user
-  // marketing frequency cap), re-sending on every page load / punch / cron just
-  // spams Meta and trips the cap harder. A failed badge can still be re-sent
-  // manually from the WhatsApp dashboard "Retry" button if needed.
+export async function findAchievementsNeedingWhatsApp(userId: number) {
+  // Badges the member has earned but not yet been WhatsApp-notified about. The
+  // caller batches ALL of these into ONE combined message (comma-separated names)
+  // rather than one message per badge — the per-message MARKETING frequency cap
+  // (Meta 131049) was failing all but the first. `whatsapp_notified` is flipped
+  // true after the single combined attempt, so nothing re-sends.
   const res = await SimpleDatabase.query(
-    `SELECT ad.title, ad.description, ua.earned_at
+    `SELECT ua.id, ad.title, ad.description, ua.earned_at
      FROM user_achievements ua
      JOIN achievement_definitions ad ON ad.id = ua.achievement_definition_id
      WHERE ua.user_id = $1
-       AND NOT EXISTS (
-         SELECT 1 FROM whatsapp_messages wm
-         WHERE wm.student_id = $1
-           AND wm.template_name = $2
-           AND wm.variables->>'2' = ad.title
-       )
-       AND NOT EXISTS (
-         SELECT 1 FROM whatsapp_message_queue q
-         WHERE q.recipient_id = $1
-           AND q.template_name = $2
-           AND q.variables->>'2' = ad.title
-       )
+       AND ua.whatsapp_notified = false
      ORDER BY ua.earned_at ASC`,
-    [userId, templateName]
+    [userId]
   );
   return res.rows;
+}
+
+export async function markAchievementsNotified(userAchievementIds: number[]) {
+  if (userAchievementIds.length === 0) return;
+  await SimpleDatabase.query(
+    `UPDATE user_achievements SET whatsapp_notified = true WHERE id = ANY($1::bigint[])`,
+    [userAchievementIds]
+  );
 }
 
 export async function insertUserAchievement(
