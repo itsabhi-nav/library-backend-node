@@ -109,9 +109,15 @@ export async function deactivatePlan(id: number, runner?: Runner) {
 }
 
 export async function countActiveByPlanId(planId: number, today: string) {
+  // Count distinct *members* only. Joining on role='MEMBER' keeps stray admin/test
+  // subscriptions out of the stat, and COUNT(DISTINCT user_id) guards against a
+  // member ever holding more than one active row for the same plan.
   const res = await SimpleDatabase.query(
-    `SELECT COUNT(*)::bigint AS cnt FROM subscriptions
-     WHERE plan_id = $1 AND status = 'ACTIVE' AND $2::date BETWEEN start_date AND end_date`,
+    `SELECT COUNT(DISTINCT s.user_id)::bigint AS cnt
+       FROM subscriptions s
+       JOIN users u ON u.id = s.user_id AND u.role = 'MEMBER'
+      WHERE s.plan_id = $1 AND s.status = 'ACTIVE'
+        AND $2::date BETWEEN s.start_date AND s.end_date`,
     [planId, today]
   );
   return Number(res.rows[0]?.cnt ?? 0);
