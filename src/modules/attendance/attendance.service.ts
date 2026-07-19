@@ -12,6 +12,7 @@ import {
 import * as bookingRepo from "../booking/booking.repository";
 import * as repo from "./attendance.repository";
 import * as statsSvc from "./attendance-stats.service";
+import { invalidateStudentOfMonthCache } from "../student-of-the-month/student-of-the-month.service";
 
 function sessionDateFromCheckIn(checkInTime: Date): string {
   return istDateFromInstant(checkInTime);
@@ -49,6 +50,12 @@ export async function recordSessionCompletion(attendance: {
       );
     }
   });
+
+  // Attendance totals changed — drop the short-lived stats caches so the next
+  // read recomputes fresh (keeps leaderboard/SOTM correct without losing the
+  // read-burst benefit of caching).
+  statsSvc.invalidateLeaderboardCache();
+  invalidateStudentOfMonthCache();
 }
 
 async function loadUserWithSeat(userId: number) {

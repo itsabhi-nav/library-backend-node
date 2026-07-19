@@ -1,4 +1,10 @@
 import { istYear, istMonth, monthStart, monthEnd, minutesToHours } from "../../shared/ist";
+import { TtlCache } from "../../shared/ttlCache";
+
+// Whole-library monthly aggregation is identical for every member, so cache the
+// sorted base (without the per-user flag) for a short window to avoid recomputing
+// the GROUP BY on every member's Home/Progress load.
+const leaderboardBaseCache = new TtlCache<LeaderboardEntry[]>(60000);
 
 export interface LeaderboardEntry {
   userId: number;
@@ -31,53 +37,73 @@ function badgeForRank(rank: number): string | null {
   return null;
 }
 
+/** Sorted, ranked entries for the month (no per-user flag) — cached per year:month. */
+async function getLeaderboardBase(
+  year: number,
+  month: number,
+  repo: typeof import("./attendance.repository")
+): Promise<LeaderboardEntry[]> {
+  return leaderboardBaseCache.getOrSet(`${year}-${month}`, async () => {
+    const start = monthStart(year, month);
+    const end = monthEnd(year, month);
+
+    const [members, aggregates] = await Promise.all([
+      repo.findAllMembers(),
+      repo.aggregateMinutesByUserInRange(start, end),
+    ]);
+    const statsByUser = new Map<number, { minutes: number; days: number }>();
+    for (const row of aggregates) {
+      statsByUser.set(Number(row.user_id), { minutes: Number(row.minutes), days: Number(row.days) });
+    }
+
+    const entries: LeaderboardEntry[] = members.map((member) => {
+      const stats = statsByUser.get(Number(member.id)) ?? { minutes: 0, days: 0 };
+      return {
+        userId: Number(member.id),
+        memberId: member.member_id,
+        fullName: member.full_name,
+        daysPresent: stats.days,
+        totalMinutes: stats.minutes,
+        totalHours: minutesToHours(stats.minutes),
+        currentUser: false,
+      };
+    });
+
+    entries.sort((a, b) => {
+      if (b.totalMinutes !== a.totalMinutes) return b.totalMinutes - a.totalMinutes;
+      if (b.daysPresent !== a.daysPresent) return b.daysPresent - a.daysPresent;
+      return a.fullName.toLowerCase().localeCompare(b.fullName.toLowerCase());
+    });
+    entries.forEach((entry, i) => {
+      entry.rank = i + 1;
+      entry.badge = badgeForRank(i + 1);
+    });
+    return entries;
+  });
+}
+
 export async function buildLeaderboard(
   year: number,
   month: number,
   currentUserId: number | null,
   repo: typeof import("./attendance.repository")
 ): Promise<LeaderboardResponse> {
-  const start = monthStart(year, month);
-  const end = monthEnd(year, month);
+  const base = await getLeaderboardBase(year, month, repo);
 
-  const members = await repo.findAllMembers();
-  const aggregates = await repo.aggregateMinutesByUserInRange(start, end);
-  const statsByUser = new Map<number, { minutes: number; days: number }>();
-  for (const row of aggregates) {
-    statsByUser.set(Number(row.user_id), {
-      minutes: Number(row.minutes),
-      days: Number(row.days),
-    });
-  }
-
-  const entries: LeaderboardEntry[] = members.map((member) => {
-    const stats = statsByUser.get(Number(member.id)) ?? { minutes: 0, days: 0 };
-    return {
-      userId: Number(member.id),
-      memberId: member.member_id,
-      fullName: member.full_name,
-      daysPresent: stats.days,
-      totalMinutes: stats.minutes,
-      totalHours: minutesToHours(stats.minutes),
-      currentUser: currentUserId != null && currentUserId === Number(member.id),
-    };
-  });
-
-  entries.sort((a, b) => {
-    if (b.totalMinutes !== a.totalMinutes) return b.totalMinutes - a.totalMinutes;
-    if (b.daysPresent !== a.daysPresent) return b.daysPresent - a.daysPresent;
-    return a.fullName.toLowerCase().localeCompare(b.fullName.toLowerCase());
-  });
-
+  // Clone so the cached base is never mutated with a per-user flag.
   let currentUserRank: number | null = null;
-  entries.forEach((entry, i) => {
-    const rank = i + 1;
-    entry.rank = rank;
-    entry.badge = badgeForRank(rank);
-    if (entry.currentUser) currentUserRank = rank;
+  const entries: LeaderboardEntry[] = base.map((entry) => {
+    const isCurrent = currentUserId != null && currentUserId === entry.userId;
+    if (isCurrent) currentUserRank = entry.rank ?? null;
+    return { ...entry, currentUser: isCurrent };
   });
 
   return { year, month, entries, currentUserRank };
+}
+
+/** Invalidate the leaderboard cache (call after attendance summary changes). */
+export function invalidateLeaderboardCache(): void {
+  leaderboardBaseCache.clear();
 }
 
 export async function getMonthlyStats(
@@ -87,12 +113,13 @@ export async function getMonthlyStats(
   repo: typeof import("./attendance.repository")
 ) {
   const ym = resolveYearMonth(year, month);
-  const start = monthStart(ym.year, ym.month);
-  const end = monthEnd(ym.year, ym.month);
 
-  const totalMinutes = await repo.sumMinutesForUserInRange(userId, start, end);
-  const daysPresent = await repo.countPresentDaysForUserInRange(userId, start, end);
+  // Everything we need (this user's minutes/days, rank, total students) is already
+  // in the cached leaderboard — no extra per-user queries required.
   const leaderboard = await buildLeaderboard(ym.year, ym.month, userId, repo);
+  const me = leaderboard.entries.find((e) => e.userId === userId);
+  const totalMinutes = me?.totalMinutes ?? 0;
+  const daysPresent = me?.daysPresent ?? 0;
 
   return {
     year: ym.year,

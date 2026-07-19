@@ -108,16 +108,29 @@ async function isThresholdMet(userId: number, def: any, metrics: Awaited<ReturnT
   }
 }
 
-export async function evaluateAndAward(userId: number) {
-  const user = await SimpleDatabase.query(`SELECT id FROM users WHERE id = $1`, [userId]);
-  if (user.rows.length === 0) throw new Error("User not found");
+// Coalesce concurrent evaluations for the same user: Progress fires /overview and
+// /achievements/me in parallel and both would otherwise run the full engine.
+const inFlightEval = new Map<number, Promise<any[]>>();
 
+export function evaluateAndAward(userId: number): Promise<any[]> {
+  const existing = inFlightEval.get(userId);
+  if (existing) return existing;
+  const p = evaluateAndAwardInner(userId).finally(() => inFlightEval.delete(userId));
+  inFlightEval.set(userId, p);
+  return p;
+}
+
+async function evaluateAndAwardInner(userId: number) {
   const year = istYear();
   const month = istMonth();
-  const metrics = await getUserMetrics(userId, year, month);
-  const monthRank = await getMonthRank(userId, year, month);
-  const earnedIds = await repo.findEarnedDefinitionIds(userId);
-  const definitions = await repo.findActiveDefinitions();
+  const [userRes, metrics, monthRank, earnedIds, definitions] = await Promise.all([
+    SimpleDatabase.query(`SELECT id FROM users WHERE id = $1`, [userId]),
+    getUserMetrics(userId, year, month),
+    getMonthRank(userId, year, month),
+    repo.findEarnedDefinitionIds(userId),
+    repo.findActiveDefinitions(),
+  ]);
+  if (userRes.rows.length === 0) throw new Error("User not found");
   const newlyUnlocked = [];
 
   for (const def of definitions) {
@@ -163,42 +176,45 @@ async function syncAchievementWhatsAppNotifications(userId: number) {
   await repo.markAchievementsNotified(pending.map((b: any) => Number(b.id)));
 }
 
-export async function getUserAchievements(userId: number) {
-  await evaluateAndAward(userId);
+export async function getUserAchievements(userId: number, opts?: { skipEvaluate?: boolean }) {
+  if (!opts?.skipEvaluate) await evaluateAndAward(userId);
   const year = istYear();
   const month = istMonth();
-  const metrics = await getUserMetrics(userId, year, month);
-  const monthRank = await getMonthRank(userId, year, month);
-  const definitions = await repo.findActiveDefinitions();
-  const earnedRows = await repo.findUserAchievements(userId);
+  const [metrics, monthRank, definitions, earnedRows] = await Promise.all([
+    getUserMetrics(userId, year, month),
+    getMonthRank(userId, year, month),
+    repo.findActiveDefinitions(),
+    repo.findUserAchievements(userId),
+  ]);
   const earnedMap = new Map<number, any>();
   for (const row of earnedRows) {
     earnedMap.set(Number(row.achievement_definition_id), row);
   }
 
-  const progressList = [];
-  let earnedCount = 0;
-  for (const def of definitions) {
-    const earned = earnedMap.get(Number(def.id));
-    const currentValue = await currentValueForDefinition(userId, def, metrics, monthRank);
-    const isEarned = earned != null;
-    if (isEarned) earnedCount++;
-    progressList.push({
-      id: Number(def.id),
-      code: def.code,
-      category: def.category,
-      title: def.title,
-      description: def.description,
-      iconKey: def.icon_key,
-      thresholdValue: Number(def.threshold_value),
-      thresholdUnit: def.threshold_unit,
-      sortOrder: Number(def.sort_order),
-      earned: isEarned,
-      earnedAt: isEarned && earned.earned_at ? new Date(earned.earned_at).toISOString() : null,
-      progressPercent: isEarned ? 100 : computeProgressPercent(def, currentValue),
-      currentValue,
-    });
-  }
+  // Compute per-definition current values in parallel (a few units hit the DB).
+  const progressList = await Promise.all(
+    definitions.map(async (def) => {
+      const earned = earnedMap.get(Number(def.id));
+      const currentValue = await currentValueForDefinition(userId, def, metrics, monthRank);
+      const isEarned = earned != null;
+      return {
+        id: Number(def.id),
+        code: def.code,
+        category: def.category,
+        title: def.title,
+        description: def.description,
+        iconKey: def.icon_key,
+        thresholdValue: Number(def.threshold_value),
+        thresholdUnit: def.threshold_unit,
+        sortOrder: Number(def.sort_order),
+        earned: isEarned,
+        earnedAt: isEarned && earned.earned_at ? new Date(earned.earned_at).toISOString() : null,
+        progressPercent: isEarned ? 100 : computeProgressPercent(def, currentValue),
+        currentValue,
+      };
+    })
+  );
+  const earnedCount = progressList.filter((p) => p.earned).length;
 
   return {
     earnedCount,

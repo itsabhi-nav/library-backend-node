@@ -1,30 +1,62 @@
 import { SimpleDatabase } from "../../core/database/SimpleDatabase";
 import { longestConsecutiveStreak } from "../../shared/streak";
 import { istYear, istMonth, monthStart, monthEnd, minutesToHours } from "../../shared/ist";
+import { TtlCache } from "../../shared/ttlCache";
+
+// Same result for the whole library within a month — cache briefly.
+const sotmCache = new TtlCache<any>(60000);
 
 export async function getStudentOfTheMonth(year?: number | null, month?: number | null) {
   const ym =
     year != null && month != null ? { year, month } : { year: istYear(), month: istMonth() };
+  return sotmCache.getOrSet(`${ym.year}-${ym.month}`, () => computeStudentOfTheMonth(ym.year, ym.month));
+}
+
+/** Invalidate the SOTM cache (call after attendance summary changes). */
+export function invalidateStudentOfMonthCache(): void {
+  sotmCache.clear();
+}
+
+async function computeStudentOfTheMonth(yr: number, mo: number) {
+  const ym = { year: yr, month: mo };
   const start = monthStart(ym.year, ym.month);
   const end = monthEnd(ym.year, ym.month);
 
-  const membersRes = await SimpleDatabase.query(
-    `SELECT id, member_id, full_name FROM users WHERE role = 'MEMBER' ORDER BY id`,
-    []
-  );
+  // Members + monthly aggregate + all present-dates fetched in parallel (3 queries
+  // total instead of the old N+1 one-query-per-member streak loop).
+  const [membersRes, aggRes, datesRes] = await Promise.all([
+    SimpleDatabase.query(
+      `SELECT id, member_id, full_name FROM users WHERE role = 'MEMBER' ORDER BY id`,
+      []
+    ),
+    SimpleDatabase.query(
+      `SELECT user_id, COALESCE(SUM(total_minutes), 0)::bigint AS minutes,
+              COUNT(CASE WHEN total_minutes > 0 THEN 1 END)::bigint AS days
+       FROM daily_attendance_summary
+       WHERE attendance_date >= $1 AND attendance_date <= $2
+       GROUP BY user_id`,
+      [start, end]
+    ),
+    SimpleDatabase.query(
+      `SELECT user_id, attendance_date FROM daily_attendance_summary
+       WHERE total_minutes > 0 AND attendance_date >= $1 AND attendance_date <= $2
+       ORDER BY user_id, attendance_date ASC`,
+      [start, end]
+    ),
+  ]);
   const members = membersRes.rows;
 
-  const aggRes = await SimpleDatabase.query(
-    `SELECT user_id, COALESCE(SUM(total_minutes), 0)::bigint AS minutes,
-            COUNT(CASE WHEN total_minutes > 0 THEN 1 END)::bigint AS days
-     FROM daily_attendance_summary
-     WHERE attendance_date >= $1 AND attendance_date <= $2
-     GROUP BY user_id`,
-    [start, end]
-  );
   const monthStats = new Map<number, { minutes: number; days: number }>();
   for (const row of aggRes.rows) {
     monthStats.set(Number(row.user_id), { minutes: Number(row.minutes), days: Number(row.days) });
+  }
+
+  const datesByUser = new Map<number, string[]>();
+  for (const row of datesRes.rows) {
+    const uid = Number(row.user_id);
+    const list = datesByUser.get(uid) ?? [];
+    list.push(String(row.attendance_date).substring(0, 10));
+    datesByUser.set(uid, list);
   }
 
   let topHours: any = null;
@@ -45,14 +77,7 @@ export async function getStudentOfTheMonth(year?: number | null, month?: number 
       topAttendance = member;
     }
 
-    const datesRes = await SimpleDatabase.query(
-      `SELECT attendance_date FROM daily_attendance_summary
-       WHERE user_id = $1 AND total_minutes > 0 AND attendance_date >= $2 AND attendance_date <= $3
-       ORDER BY attendance_date ASC`,
-      [member.id, start, end]
-    );
-    const dates = datesRes.rows.map((r) => String(r.attendance_date).substring(0, 10));
-    const streakInMonth = longestConsecutiveStreak(dates);
+    const streakInMonth = longestConsecutiveStreak(datesByUser.get(Number(member.id)) ?? []);
     if (streakInMonth > topStreakValue) {
       topStreakValue = streakInMonth;
       topStreak = member;

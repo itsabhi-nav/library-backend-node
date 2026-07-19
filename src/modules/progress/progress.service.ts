@@ -1,5 +1,4 @@
-import { istYear, istMonth, monthStart, monthEnd, minutesToHours } from "../../shared/ist";
-import { SimpleDatabase } from "../../core/database/SimpleDatabase";
+import { istYear, istMonth, minutesToHours } from "../../shared/ist";
 import * as achievementSvc from "../achievements/achievements.service";
 import * as examSvc from "../exams/exams.service";
 import * as attendanceStats from "../attendance/attendance-stats.service";
@@ -15,11 +14,11 @@ function formatHours(hours: number): string {
   return `${hours}h`;
 }
 
-export async function buildCompareAverage(userMinutes: number, year: number, month: number) {
-  const start = monthStart(year, month);
-  const end = monthEnd(year, month);
-  const members = await attendanceRepo.findAllMembers();
-  if (members.length === 0) {
+export function buildCompareAverage(
+  userMinutes: number,
+  entries: Awaited<ReturnType<typeof attendanceStats.buildLeaderboard>>["entries"]
+) {
+  if (entries.length === 0) {
     return {
       yourHours: minutesToHours(userMinutes),
       libraryAverageHours: 0,
@@ -28,11 +27,10 @@ export async function buildCompareAverage(userMinutes: number, year: number, mon
     };
   }
 
-  let totalMinutes = 0;
-  for (const member of members) {
-    totalMinutes += await attendanceRepo.sumMinutesForUserInRange(Number(member.id), start, end);
-  }
-  const avgMinutes = totalMinutes / members.length;
+  // Average over all members, derived from the already-built leaderboard entries
+  // (no extra DB — replaces the old one-query-per-member loop).
+  const totalMinutes = entries.reduce((sum, e) => sum + e.totalMinutes, 0);
+  const avgMinutes = totalMinutes / entries.length;
   const yourHours = minutesToHours(userMinutes);
   const avgHours = minutesToHours(Math.floor(avgMinutes));
   const diff = Math.round((yourHours - avgHours) * 10) / 10;
@@ -95,23 +93,26 @@ export function buildRankInsight(leaderboard: Awaited<ReturnType<typeof attendan
 
 export async function getOverview(userId: number, year?: number | null, month?: number | null) {
   const ym = resolveYearMonth(year, month);
+
+  // Award once here; the achievements call below skips re-evaluating.
   await achievementSvc.evaluateAndAward(userId);
 
   const leaderboard = await attendanceStats.buildLeaderboard(ym.year, ym.month, userId, attendanceRepo);
-  const userMinutes = await attendanceRepo.sumMinutesForUserInRange(
-    userId,
-    monthStart(ym.year, ym.month),
-    monthEnd(ym.year, ym.month)
-  );
-  const achievements = await achievementSvc.getUserAchievements(userId);
+  const userMinutes = leaderboard.entries.find((e) => e.userId === userId)?.totalMinutes ?? 0;
+
+  const [examCountdown, achievements, latestMilestone] = await Promise.all([
+    examSvc.getMyTarget(userId),
+    achievementSvc.getUserAchievements(userId, { skipEvaluate: true }),
+    achievementSvc.getLatestMilestone(userId),
+  ]);
 
   return {
     year: ym.year,
     month: ym.month,
-    examCountdown: await examSvc.getMyTarget(userId),
-    compareAverage: await buildCompareAverage(userMinutes, ym.year, ym.month),
+    examCountdown,
+    compareAverage: buildCompareAverage(userMinutes, leaderboard.entries),
     rankInsight: buildRankInsight(leaderboard, userMinutes),
-    latestMilestone: await achievementSvc.getLatestMilestone(userId),
+    latestMilestone,
     earnedBadgeCount: achievements.earnedCount,
     totalBadgeCount: achievements.totalCount,
   };
