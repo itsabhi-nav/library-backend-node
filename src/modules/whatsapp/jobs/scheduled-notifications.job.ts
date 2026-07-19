@@ -16,41 +16,18 @@ export function startWhatsAppScheduledJobs(): void {
     return;
   }
 
-  // Fee reminders: 5th, 15th and 25th at 12:00 PM IST (members with pending balance only)
+  // Fee reminders: DAILY at 12:00 PM IST. Sends to every active member who still
+  // has an unpaid invoice (PENDING or OVERDUE), so a defaulter is nudged every day
+  // until they pay or the invoice is waived — at which point they drop out of the
+  // recipient set automatically (runFeeReminders filters PAID/WAIVED out).
   cron.schedule(
-    "0 12 5 * *",
+    "0 12 * * *",
     async () => {
       try {
         const count = await runFeeReminders();
-        logger.info({ count, day: 5 }, "Fee reminder WhatsApp batch (5th)");
+        logger.info({ count }, "Fee reminder WhatsApp batch (daily)");
       } catch (error) {
-        logger.error({ error }, "Fee reminder job failed (5th)");
-      }
-    },
-    { timezone: "Asia/Kolkata" }
-  );
-
-  cron.schedule(
-    "0 12 15 * *",
-    async () => {
-      try {
-        const count = await runFeeReminders();
-        logger.info({ count, day: 15 }, "Fee reminder WhatsApp batch (15th)");
-      } catch (error) {
-        logger.error({ error }, "Fee reminder job failed (15th)");
-      }
-    },
-    { timezone: "Asia/Kolkata" }
-  );
-
-  cron.schedule(
-    "0 12 25 * *",
-    async () => {
-      try {
-        const count = await runFeeReminders();
-        logger.info({ count, day: 25 }, "Fee reminder WhatsApp batch (25th)");
-      } catch (error) {
-        logger.error({ error }, "Fee reminder job failed (25th)");
+        logger.error({ error }, "Fee reminder job failed (daily)");
       }
     },
     { timezone: "Asia/Kolkata" }
