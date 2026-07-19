@@ -10,6 +10,7 @@ import {
   hasTemplateBeenSent,
   hasReachablePhone,
   loadAllLibraryBroadcastRecipients,
+  getPortalUrl,
 } from "./notify.helpers";
 
 export interface CreatedInvoiceNotify {
@@ -269,6 +270,7 @@ export async function notifyNewMemberRegistration(
     "3": planName || "—",
     "4": seatNumber?.replace(/^Seat-/i, "") ?? "Not assigned",
     "5": phoneNumber.replace(/\D/g, "").slice(-10),
+    "6": await getPortalUrl(),
   };
 
   await queueTemplateMessages(

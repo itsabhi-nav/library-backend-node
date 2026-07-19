@@ -14,10 +14,22 @@ export const TEMPLATES = {
   ACHIEVEMENT: "library_achievement",
   SUBSCRIPTION_EXPIRY: "library_subscription_expiry",
   EXAM_COUNTDOWN: "library_exam_countdown",
-  NEW_MEMBER: "library_admin_new_member",
+  // Member + admin "membership confirmation" on registration. Upgraded from the
+  // old library_admin_new_member body to include the library portal link ({{6}}).
+  NEW_MEMBER: "library_membership_confirmation",
   STUDENT_OF_MONTH: "library_student_of_month",
   SOTM_BROADCAST: "library_sotm_broadcast",
 } as const;
+
+/** Library portal URL used in WhatsApp messages (config override, sane default). */
+export async function getPortalUrl(): Promise<string> {
+  const res = await SimpleDatabase.query(
+    `SELECT config_value FROM library_config WHERE config_key = 'library_portal_url' LIMIT 1`,
+    []
+  );
+  const url = String(res.rows[0]?.config_value ?? "").trim();
+  return url || "https://www.library.udayanpublicschool.co.in/";
+}
 
 export function hasReachablePhone(user: { phone_number?: string | null } | null | undefined): boolean {
   return Boolean(user?.phone_number && String(user.phone_number).trim());
