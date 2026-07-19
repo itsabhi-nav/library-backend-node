@@ -156,6 +156,11 @@ export async function runAutoFeeGenerationForToday() {
         planName: sub.plan_name_ref,
         dueDate,
       });
+      // Accrual model: roll the membership period forward one cycle whether or
+      // not the previous invoice was paid. Unpaid invoices stay outstanding, so
+      // dues accumulate, while end_date keeps the member "current" for
+      // date-range checks (seat validity, shift-hours punch-in, auto punch-out).
+      await repo.extendSubscriptionEndDate(Number(sub.id), durationDays);
       created++;
       createdForNotify.push({ userId, amount: billedAmount, dueDate });
     } catch (e: any) {
@@ -282,16 +287,10 @@ export async function recordPayment(invoiceId: number, request: FeePaymentInput,
     const status = refreshStatus({ ...invoice, amount_paid: newPaid });
     const updated = await repo.updateInvoiceAmountPaid(invoiceId, newPaid, status, client);
 
-    if (status === "PAID" && invoice.subscription_id) {
-      const planRes = await client.query(
-        `SELECT p.duration_days FROM subscriptions s
-         JOIN membership_plans p ON p.id = s.plan_id
-         WHERE s.id = $1 LIMIT 1`,
-        [invoice.subscription_id]
-      );
-      const durationDays = Number(planRes.rows[0]?.duration_days ?? 30);
-      await repo.extendSubscriptionEndDate(Number(invoice.subscription_id), durationDays, client);
-    }
+    // Accrual model: the billing cycle (runAutoFeeGenerationForToday) is the sole
+    // driver of the subscription end_date. A payment only clears dues — it does
+    // not extend the membership period — so paying and auto-billing can never
+    // double-advance end_date.
 
     const remaining = Math.max(0, Number(invoice.amount) - newPaid);
     void import("../whatsapp/library-notifications.service").then(({ notifyPaymentReceived }) =>

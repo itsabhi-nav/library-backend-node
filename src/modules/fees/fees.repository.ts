@@ -27,8 +27,7 @@ export async function findActiveMemberSubscriptions() {
      JOIN membership_plans p ON p.id = s.plan_id
      WHERE s.status = 'ACTIVE'
        AND u.role = 'MEMBER'
-       AND u.is_active = true
-       AND s.end_date >= CURRENT_DATE`,
+       AND u.is_active = true`,
     []
   );
   return res.rows;

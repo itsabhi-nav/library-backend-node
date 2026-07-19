@@ -79,24 +79,30 @@ export async function notifyPaymentReceived(
 }
 
 export async function runFeeReminders(): Promise<number> {
+  // Accrual billing can leave a member with several unpaid invoices at once.
+  // Collapse them into ONE reminder per member — total dues, dated from the
+  // oldest unpaid month — so nobody gets multiple fee-reminder messages a day.
   const res = await SimpleDatabase.query(
-    `SELECT fi.id, fi.user_id, fi.amount, fi.amount_paid, fi.status,
-            fi.billing_year, fi.billing_month,
+    `SELECT fi.user_id,
+            SUM(fi.amount - fi.amount_paid) AS pending_total,
+            MIN(fi.billing_year * 100 + fi.billing_month) AS oldest_ym,
             u.full_name, u.phone_number
      FROM fee_invoices fi
      JOIN users u ON u.id = fi.user_id
      WHERE fi.status NOT IN ('PAID', 'WAIVED')
        AND fi.amount > fi.amount_paid
-       AND u.role = 'MEMBER' AND u.is_active = true`,
+       AND u.role = 'MEMBER' AND u.is_active = true
+     GROUP BY fi.user_id, u.full_name, u.phone_number`,
     []
   );
 
   const recipients = [];
   for (const row of res.rows) {
     if (!row.phone_number) continue;
-    const pending = Math.max(0, Number(row.amount) - Number(row.amount_paid));
+    const pending = Math.max(0, Number(row.pending_total));
     if (pending <= 0) continue;
-    const monthLabel = formatBillingMonth(Number(row.billing_year), Number(row.billing_month));
+    const oldestYm = Number(row.oldest_ym);
+    const monthLabel = formatBillingMonth(Math.floor(oldestYm / 100), oldestYm % 100);
     recipients.push({
       phoneNumber: String(row.phone_number),
       id: Number(row.user_id),
