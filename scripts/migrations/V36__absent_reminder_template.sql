@@ -2,7 +2,7 @@
 -- Sent once, ~2 min after the last shift ends. Text-only, one variable (name).
 -- Idempotent.
 INSERT INTO whatsapp_templates (template_name, template_language, template_status, template_category, template_content, footer_text, variables, org_id) VALUES
-('library_absent_reminder', 'en', 'approved', 'UTILITY',
+('library_absent_reminder', 'en', 'approved', 'MARKETING',
 '📢 *Absence Notification | अनुपस्थिति सूचना*
 
 Dear *{{1}}*,
