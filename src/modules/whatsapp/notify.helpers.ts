@@ -21,6 +21,9 @@ export const TEMPLATES = {
   SOTM_BROADCAST: "library_sotm_broadcast",
   DAILY_ADMIN_REPORT: "library_daily_admin_report",
   ABSENT_REMINDER: "library_absent_reminder",
+  ANNOUNCEMENT: "library_announcement_1",
+  ANNOUNCEMENT_IMAGE: "library_announcement_image",
+  FESTIVAL: "festival_greetings",
 } as const;
 
 /** Library portal URL used in WhatsApp messages (config override, sane default). */
@@ -71,7 +74,8 @@ export async function queueTemplateMessages(
   recipients: queue.WhatsAppRecipient[],
   templateName: string,
   batchPrefix: string,
-  priority = 5
+  priority = 5,
+  extraMetadata?: Record<string, unknown>
 ): Promise<void> {
   if (!whatsappConfig.enabled || recipients.length === 0) return;
   const batchId = newBatchId(batchPrefix);
@@ -81,7 +85,7 @@ export async function queueTemplateMessages(
     TEMPLATE_LANGUAGE,
     SCOPE_KEY,
     batchId,
-    { source: batchPrefix },
+    { source: batchPrefix, ...(extraMetadata ?? {}) },
     priority
   );
   void processQueuedMessages().catch(() => {});

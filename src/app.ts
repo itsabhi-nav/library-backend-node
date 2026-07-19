@@ -24,6 +24,7 @@ import { analyticsRouter } from "./modules/analytics/analytics.routes";
 import { dashboardRouter } from "./modules/dashboard/dashboard.routes";
 import { studentOfTheMonthRouter } from "./modules/student-of-the-month/student-of-the-month.routes";
 import { whatsappRouter } from "./modules/whatsapp/whatsapp.routes";
+import { announcementRouter } from "./modules/announcement/announcement.routes";
 
 export const createApp = () => {
   const app = express();
@@ -71,6 +72,7 @@ export const createApp = () => {
   app.use("/api/dashboard", dashboardRouter);
   app.use("/api/student-of-the-month", studentOfTheMonthRouter);
   app.use("/api/whatsapp", whatsappRouter);
+  app.use("/api/announcement", announcementRouter);
 
   // Error handler must be last.
   app.use(errorMiddleware);

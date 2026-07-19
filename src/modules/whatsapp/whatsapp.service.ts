@@ -50,7 +50,8 @@ async function sendDirect(
   templateLanguage: string,
   variables: Record<string, unknown>,
   scope: string,
-  recipientId: number | null
+  recipientId: number | null,
+  headerImageId?: string | null
 ) {
   checkCircuitBreaker();
   const lang = templateLanguage || "en";
@@ -59,7 +60,7 @@ async function sendDirect(
   }
 
   const formattedPhone = formatPhone(phone);
-  const components = await buildTemplateComponents(templateName, lang, scope, variables);
+  const components = await buildTemplateComponents(templateName, lang, scope, variables, headerImageId);
   const url = `${whatsappConfig.baseUrl}/${whatsappConfig.apiVersion}/${whatsappConfig.phoneNumberId}/messages`;
 
   const payload = {
@@ -109,7 +110,8 @@ export async function sendTemplateMessage(
   variables: Record<string, unknown>,
   scopeKey?: string,
   recipientId?: number | null,
-  skipQueue = false
+  skipQueue = false,
+  headerImageId?: string | null
 ) {
   if (!whatsappConfig.enabled) {
     logger.warn({ to }, "WhatsApp disabled — skipping send");
@@ -125,14 +127,14 @@ export async function sendTemplateMessage(
       templateLanguage,
       scope,
       batchId,
-      { source: "individual_send" },
+      { source: "individual_send", ...(headerImageId ? { headerImageId } : {}) },
       1
     );
     void processQueuedMessages();
     return;
   }
 
-  return sendDirect(to, templateName, templateLanguage, variables, scope, recipientId ?? null);
+  return sendDirect(to, templateName, templateLanguage, variables, scope, recipientId ?? null, headerImageId);
 }
 
 export async function sendFromQueueMessage(msg: any) {
@@ -145,7 +147,8 @@ export async function sendFromQueueMessage(msg: any) {
     variables,
     String(msg.org_id),
     msg.recipient_id != null ? Number(msg.recipient_id) : null,
-    true
+    true,
+    metadata?.headerImageId ?? null
   );
 }
 

@@ -56,13 +56,30 @@ export async function buildTemplateComponents(
   templateName: string,
   templateLanguage: string,
   orgId: string,
-  variables: Record<string, unknown>
+  variables: Record<string, unknown>,
+  headerImageId?: string | null
 ): Promise<object[]> {
   const components: object[] = [];
   let meta = await loadTemplateMeta(templateName, templateLanguage, orgId);
 
   let headerType = meta?.header_type ?? null;
   let headerContent = meta?.header_content ?? null;
+
+  // A per-send uploaded image (Meta media id) overrides the template's stored
+  // header link — used by admin announcements where the image differs each time.
+  if (headerImageId) {
+    components.push({
+      type: "header",
+      parameters: [{ type: "image", image: { id: headerImageId } }],
+    });
+    if (variables && Object.keys(variables).length > 0) {
+      const bodyParams = Object.entries(variables)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([, v]) => ({ type: "text", text: String(v) }));
+      components.push({ type: "body", parameters: bodyParams });
+    }
+    return components;
+  }
 
   // The welcome/admission message always ships with an image header; make sure
   // we send a valid public https image even if the template row/config is empty
