@@ -137,7 +137,12 @@ export async function processQueuedMessages(
           dailyCount++;
         } catch (e: any) {
           totalFailed++;
-          const retries = Number(msg.current_retries ?? 0) + 1;
+          // Permanent Meta failures (marketing cap, template/policy errors) must
+          // not be resurrected by the daily retry reset — push retries past the
+          // max so resetFailedMessagesForRetry ignores them.
+          const retries = e?.permanent === true
+            ? 100000
+            : Number(msg.current_retries ?? 0) + 1;
           await markQueueFailed(Number(msg.id), e?.message ?? "Send failed", retries);
         }
         totalProcessed++;

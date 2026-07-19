@@ -162,6 +162,11 @@ async function syncAchievementWhatsAppNotifications(userId: number) {
   const earnedCount = (await repo.findEarnedDefinitionIds(userId)).size;
   const totalCount = definitions.length;
 
+  // Reserve the badges FIRST (mark notified before sending). This closes the race
+  // where two concurrent evaluations both find the same pending badges and each
+  // queues a message. A single attempt, never re-spam — even if the send fails.
+  await repo.markAchievementsNotified(pending.map((b: any) => Number(b.id)));
+
   // ONE combined WhatsApp message for every not-yet-notified badge (names joined
   // by commas) instead of one per badge — avoids Meta's marketing frequency cap.
   await notifyAchievementsUnlockedBatch(
@@ -171,9 +176,6 @@ async function syncAchievementWhatsAppNotifications(userId: number) {
     earnedCount,
     totalCount
   );
-
-  // Mark notified regardless of delivery outcome: a single attempt, never re-spam.
-  await repo.markAchievementsNotified(pending.map((b: any) => Number(b.id)));
 }
 
 export async function getUserAchievements(userId: number, opts?: { skipEvaluate?: boolean }) {

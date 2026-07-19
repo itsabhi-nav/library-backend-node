@@ -90,6 +90,7 @@ async function sendDirect(
     return messageId;
   } catch (e: any) {
     const status = e?.response?.status;
+    const metaCode = Number(e?.response?.data?.error?.code);
     recordApiResult(false, status);
     const errMsg = e?.response?.data?.error?.message ?? e.message;
     await SimpleDatabase.query(
@@ -99,8 +100,21 @@ async function sendDirect(
        ) VALUES ($1, $2, $3, $4, $5, 'failed', $6, $7, $8::jsonb, NOW())`,
       [scope, formattedPhone, templateName, lang, `failed_${Date.now()}`, errMsg, recipientId, JSON.stringify(variables)]
     );
-    throw new Error(errMsg);
+    const err = new Error(errMsg) as Error & { permanent?: boolean };
+    err.permanent = isPermanentMetaError(metaCode);
+    throw err;
   }
+}
+
+// Meta errors that will never succeed on retry — policy caps, template problems,
+// undeliverable numbers, invalid params. Retrying these only spams the message log
+// (e.g. 131049 "healthy ecosystem engagement" marketing cap on every daily reset).
+function isPermanentMetaError(code: number): boolean {
+  if (!Number.isFinite(code)) return false;
+  if (code === 131049 || code === 131047 || code === 131026 || code === 131051) return true;
+  if (code === 100 || code === 133010) return true;
+  if (code >= 132000 && code <= 132999) return true; // template not found/paused/mismatch
+  return false;
 }
 
 export async function sendTemplateMessage(
