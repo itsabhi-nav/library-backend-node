@@ -1,4 +1,5 @@
 import axios from "axios";
+import FormData from "form-data";
 import { logger } from "../../config/logger";
 import { SimpleDatabase } from "../../core/database/SimpleDatabase";
 import { whatsappConfig, formatPhone, newBatchId, SCOPE_KEY } from "./whatsapp.config";
@@ -199,6 +200,104 @@ export async function retryExistingMessage(
 
 export async function cleanupOldQueueMessages(daysOld: number) {
   return queue.cleanupOldQueueMessages(daysOld);
+}
+
+// ── Document (media) template sends ─────────────────────────────────────────
+// Used for the daily admin report: the full detail ships as a private PDF that
+// is uploaded to Meta's media store (never a public URL) and referenced by id in
+// a DOCUMENT header. Sent directly (not via the text queue) since it is a small,
+// once-a-day admin-only broadcast.
+
+/** Upload a file to the Meta media store and return its media id. */
+export async function uploadMediaToMeta(
+  buffer: Buffer,
+  filename: string,
+  mimeType: string
+): Promise<string> {
+  const url = `${whatsappConfig.baseUrl}/${whatsappConfig.apiVersion}/${whatsappConfig.phoneNumberId}/media`;
+  const form = new FormData();
+  form.append("messaging_product", "whatsapp");
+  form.append("type", mimeType);
+  form.append("file", buffer, { filename, contentType: mimeType });
+
+  const res = await axios.post(url, form, {
+    headers: { Authorization: `Bearer ${whatsappConfig.accessToken}`, ...form.getHeaders() },
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity,
+  });
+  const id = res.data?.id;
+  if (!id) throw new Error("Meta media upload returned no media id");
+  return String(id);
+}
+
+/** Send a template whose header is a document (by media id), plus body variables. */
+export async function sendDocumentTemplate(
+  to: string,
+  templateName: string,
+  templateLanguage: string,
+  variables: Record<string, unknown>,
+  mediaId: string,
+  filename: string,
+  scopeKey?: string,
+  recipientId?: number | null
+): Promise<string | undefined> {
+  if (!whatsappConfig.enabled) {
+    logger.warn({ to }, "WhatsApp disabled — skipping document send");
+    return;
+  }
+  const scope = scopeKey ?? SCOPE_KEY;
+  const lang = templateLanguage || "en";
+  if (!(await validateTemplate(templateName, lang, scope))) {
+    throw new Error(`Template '${templateName}' not found or not approved (scope=${scope})`);
+  }
+
+  const formattedPhone = formatPhone(to);
+  const bodyParams = Object.entries(variables)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([, v]) => ({ type: "text", text: String(v) }));
+  const components: object[] = [
+    {
+      type: "header",
+      parameters: [{ type: "document", document: { id: mediaId, filename } }],
+    },
+  ];
+  if (bodyParams.length > 0) components.push({ type: "body", parameters: bodyParams });
+
+  const url = `${whatsappConfig.baseUrl}/${whatsappConfig.apiVersion}/${whatsappConfig.phoneNumberId}/messages`;
+  const payload = {
+    messaging_product: "whatsapp",
+    to: formattedPhone,
+    type: "template",
+    template: { name: templateName, language: { code: lang }, components },
+  };
+
+  try {
+    const res = await axios.post(url, payload, {
+      headers: { Authorization: `Bearer ${whatsappConfig.accessToken}`, "Content-Type": "application/json" },
+    });
+    const messageId = res.data?.messages?.[0]?.id ?? `sent_${Date.now()}`;
+    await SimpleDatabase.query(
+      `INSERT INTO whatsapp_messages (
+         org_id, recipient_phone, template_name, template_language,
+         message_id, message_status, student_id, variables, sent_at
+       ) VALUES ($1, $2, $3, $4, $5, 'sent', $6, $7::jsonb, NOW())`,
+      [scope, formattedPhone, templateName, lang, messageId, recipientId ?? null, JSON.stringify(variables)]
+    );
+    recordApiResult(true);
+    return messageId;
+  } catch (e: any) {
+    const status = e?.response?.status;
+    recordApiResult(false, status);
+    const errMsg = e?.response?.data?.error?.message ?? e.message;
+    await SimpleDatabase.query(
+      `INSERT INTO whatsapp_messages (
+         org_id, recipient_phone, template_name, template_language,
+         message_id, message_status, failure_reason, student_id, variables, sent_at
+       ) VALUES ($1, $2, $3, $4, $5, 'failed', $6, $7, $8::jsonb, NOW())`,
+      [scope, formattedPhone, templateName, lang, `failed_${Date.now()}`, errMsg, recipientId ?? null, JSON.stringify(variables)]
+    );
+    throw new Error(errMsg);
+  }
 }
 
 // ── Meta status webhook ─────────────────────────────────────────────────────

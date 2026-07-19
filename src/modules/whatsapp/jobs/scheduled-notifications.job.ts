@@ -8,6 +8,7 @@ import {
   runExamCountdownReminders,
   runStudentOfTheMonthNotifications,
 } from "../library-notifications.service";
+import { runDailyAdminReport } from "../../reports/daily-report.service";
 
 /** Scheduled WhatsApp notifications — all times IST (Asia/Kolkata). */
 export function startWhatsAppScheduledJobs(): void {
@@ -86,6 +87,22 @@ export function startWhatsAppScheduledJobs(): void {
         logger.info({ count }, "Student of the Month WhatsApp notifications (last day of month)");
       } catch (error) {
         logger.error({ error }, "Student of the Month job failed");
+      }
+    },
+    { timezone: "Asia/Kolkata" }
+  );
+
+  // Daily admin report: 11:00 PM IST (after all shifts have ended). Builds a
+  // full-day PDF (shift-wise attendance + fees paid/pending + next auto
+  // fee-generation) and WhatsApps it to every admin number as a private document.
+  cron.schedule(
+    "0 23 * * *",
+    async () => {
+      try {
+        const sent = await runDailyAdminReport();
+        logger.info({ sent }, "Daily admin report WhatsApp dispatched");
+      } catch (error) {
+        logger.error({ error }, "Daily admin report job failed");
       }
     },
     { timezone: "Asia/Kolkata" }

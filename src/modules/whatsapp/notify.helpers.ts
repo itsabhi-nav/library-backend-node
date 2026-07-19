@@ -19,6 +19,7 @@ export const TEMPLATES = {
   NEW_MEMBER: "library_membership_confirmation",
   STUDENT_OF_MONTH: "library_student_of_month",
   SOTM_BROADCAST: "library_sotm_broadcast",
+  DAILY_ADMIN_REPORT: "library_daily_admin_report",
 } as const;
 
 /** Library portal URL used in WhatsApp messages (config override, sane default). */
