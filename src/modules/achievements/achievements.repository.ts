@@ -42,6 +42,12 @@ export async function findLatestAchievement(userId: number) {
 }
 
 export async function findAchievementsMissingWhatsApp(userId: number, templateName: string) {
+  // Each earned badge gets AT MOST ONE WhatsApp attempt. We deliberately match on
+  // ANY prior message row (sent OR failed), not just 'sent'. Achievement messages
+  // are a MARKETING template — if a send fails (e.g. Meta error 131049, the per-user
+  // marketing frequency cap), re-sending on every page load / punch / cron just
+  // spams Meta and trips the cap harder. A failed badge can still be re-sent
+  // manually from the WhatsApp dashboard "Retry" button if needed.
   const res = await SimpleDatabase.query(
     `SELECT ad.title, ad.description, ua.earned_at
      FROM user_achievements ua
@@ -52,14 +58,12 @@ export async function findAchievementsMissingWhatsApp(userId: number, templateNa
          WHERE wm.student_id = $1
            AND wm.template_name = $2
            AND wm.variables->>'2' = ad.title
-           AND wm.message_status = 'sent'
        )
        AND NOT EXISTS (
          SELECT 1 FROM whatsapp_message_queue q
          WHERE q.recipient_id = $1
            AND q.template_name = $2
            AND q.variables->>'2' = ad.title
-           AND q.status = 'pending'
        )
      ORDER BY ua.earned_at ASC`,
     [userId, templateName]
