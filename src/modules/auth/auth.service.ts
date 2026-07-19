@@ -11,6 +11,7 @@ import { notifyAdmissionIfNeeded } from "../whatsapp/admission.service";
 import { notifyNewMemberFromUserId, DEFAULT_EXAM_NAME } from "../whatsapp/library-notifications.service";
 import { validateSeatForAssignment } from "../booking/booking.service";
 import * as bookingRepo from "../booking/booking.repository";
+import { invalidateLeaderboardCache } from "../attendance/attendance-stats.service";
 import { invalidateAuthUser } from "../../middlewares/authMiddleware";
 import { insertInvoice } from "../fees/fees.repository";
 import * as repo from "./auth.repository";
@@ -244,6 +245,7 @@ export async function setActiveStatus(userId: number, active: boolean) {
 
   const updated = await repo.updateUser(userId, { is_active: active });
   invalidateAuthUser(userId);
+  invalidateLeaderboardCache();
   return serializeUserWithSeat(updated);
 }
 
@@ -277,6 +279,7 @@ export async function deleteStudent(userId: number) {
     await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
   });
   invalidateAuthUser(userId);
+  invalidateLeaderboardCache();
 }
 
 export async function changeOwnPassword(userId: number, currentPassword: string, newPassword: string) {
@@ -454,4 +457,3 @@ async function serializeUsersWithSeats(rows: any[]) {
   const seatMap = await repo.loadSeatsForUsers(rows);
   return rows.map((u) => serializeUser(u, u.assigned_seat_id != null ? seatMap.get(Number(u.assigned_seat_id)) : null));
 }
-

@@ -172,7 +172,7 @@ export async function aggregateMinutesByUserInRange(start: string, end: string) 
 
 export async function findAllMembers() {
   const res = await SimpleDatabase.query(
-    `SELECT ${USER_COLUMNS} FROM users WHERE role = 'MEMBER' ORDER BY id`,
+    `SELECT ${USER_COLUMNS} FROM users WHERE role = 'MEMBER' AND is_active = true ORDER BY id`,
     []
   );
   return res.rows;
