@@ -41,6 +41,12 @@ export async function buildDailyReportData(): Promise<DailyReportData> {
   const today = istToday();
   const libraryName = await getConfig("library_name", "Library");
 
+  const totalRes = await SimpleDatabase.query(
+    `SELECT COUNT(*)::int AS cnt FROM users WHERE role = 'MEMBER' AND is_active = true`,
+    []
+  );
+  const totalStudents = Number(totalRes.rows[0]?.cnt ?? 0);
+
   const dateLabel = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Kolkata",
     weekday: "short",
@@ -168,33 +174,14 @@ export async function buildDailyReportData(): Promise<DailyReportData> {
   nextGenRaw.sort((a, b) => a.nextDateIso.localeCompare(b.nextDateIso));
   const nextGen = nextGenRaw.map(({ name, memberId, dateLabel }) => ({ name, memberId, dateLabel }));
 
-  // Summary: group upcoming generations within the next 7 days.
-  const horizon = addDays(today, 7);
-  const upcoming = new Map<string, number>();
-  for (const r of nextGenRaw) {
-    if (r.nextDateIso >= today && r.nextDateIso <= horizon) {
-      upcoming.set(r.dateLabel, (upcoming.get(r.dateLabel) ?? 0) + 1);
-    }
-  }
-  let nextGenSummary: string;
-  if (upcoming.size > 0) {
-    nextGenSummary = Array.from(upcoming.entries())
-      .map(([d, c]) => `${d} — ${c}`)
-      .join(", ");
-  } else if (nextGenRaw.length > 0) {
-    nextGenSummary = `Earliest ${nextGenRaw[0]!.dateLabel}`;
-  } else {
-    nextGenSummary = "No active members";
-  }
-
   return {
     libraryName,
     dateLabel,
     presentCount,
+    totalStudents,
     collectedTodayLabel,
     duesTotalLabel,
     duesCount: dues.length,
-    nextGenSummary,
     shifts,
     paidToday,
     dues,
@@ -230,7 +217,7 @@ export async function runDailyAdminReport(): Promise<number> {
     "2": `${data.presentCount} member(s)`,
     "3": data.collectedTodayLabel,
     "4": `${data.duesCount} member(s) • ${data.duesTotalLabel}`,
-    "5": data.nextGenSummary,
+    "5": `${data.totalStudents}`,
   };
 
   let sent = 0;

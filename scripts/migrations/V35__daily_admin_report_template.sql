@@ -11,13 +11,13 @@ INSERT INTO whatsapp_templates (
 Attendance today: {{2}}
 Fees collected today: {{3}}
 Pending dues: {{4}}
-Next auto fee-generation: {{5}}
+Total students: {{5}}
 
 Full member-wise details (punch-in/out times, paid & pending, next billing date) are in the attached PDF.',
   'DOCUMENT',
   NULL,
   'Automated daily report',
-  '[{"name":"{{1}}","type":"text","example":"Sat, 19 Jul 2026"},{"name":"{{2}}","type":"text","example":"37 member(s)"},{"name":"{{3}}","type":"text","example":"₹4,500 from 9 payment(s)"},{"name":"{{4}}","type":"text","example":"6 member(s) • ₹3,000"},{"name":"{{5}}","type":"text","example":"20 Jul 2026 — 3, 22 Jul 2026 — 2"}]'::jsonb,
+  '[{"name":"{{1}}","type":"text","example":"Sat, 19 Jul 2026"},{"name":"{{2}}","type":"text","example":"37 member(s)"},{"name":"{{3}}","type":"text","example":"₹4,500 from 9 payment(s)"},{"name":"{{4}}","type":"text","example":"6 member(s) • ₹3,000"},{"name":"{{5}}","type":"text","example":"128"}]'::jsonb,
   'library'
 )
 ON CONFLICT (template_name, template_language, org_id) DO UPDATE SET

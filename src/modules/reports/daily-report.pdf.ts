@@ -38,10 +38,10 @@ export interface DailyReportData {
   libraryName: string;
   dateLabel: string;
   presentCount: number;
+  totalStudents: number;
   collectedTodayLabel: string;
   duesTotalLabel: string;
   duesCount: number;
-  nextGenSummary: string;
   shifts: ReportShiftGroup[];
   paidToday: ReportPaidRow[];
   dues: ReportDueRow[];
@@ -73,10 +73,10 @@ export function buildDailyReportPdf(data: DailyReportData): Promise<Buffer> {
 
   // ── Summary strip ──────────────────────────────────────────────────────────
   const summary: [string, string][] = [
+    ["Total students", `${data.totalStudents}`],
     ["Present today", `${data.presentCount} member(s)`],
     ["Collected today", data.collectedTodayLabel],
     ["Pending dues", `${data.duesCount} member(s) • ${data.duesTotalLabel}`],
-    ["Next auto fee-generation", data.nextGenSummary],
   ];
   for (const [k, v] of summary) {
     doc.fontSize(10).fillColor(MUTED).font("Helvetica").text(`${k}: `, { continued: true });

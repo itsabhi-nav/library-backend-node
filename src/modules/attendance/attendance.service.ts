@@ -259,35 +259,37 @@ export async function getSeatMapSnapshot(_shiftId: number | null) {
   };
 }
 
-export async function autoPunchOutAtShiftEnd(endTime: string) {
-  const targetEnd = parseTimeToMinutes(endTime);
-  const activeRows = await repo.findAllActiveAttendances();
-  let count = 0;
-
-  for (const row of activeRows) {
-    const userId = Number(row.user_id);
-    const subRes = await SimpleDatabase.query(
-      `SELECT s.end_time
-       FROM subscriptions sub
-       JOIN membership_plans mp ON mp.id = sub.plan_id
-       LEFT JOIN shifts s ON s.id = mp.shift_id
-       WHERE sub.user_id = $1 AND sub.status = 'ACTIVE'
+/**
+ * Punch out everyone still punched in whose subscribed shift end time has already
+ * passed (IST). One query resolves each punched-in member's shift, so it works
+ * for any number of shifts and reflects live shift edits. Designed to run every
+ * minute; using `<=` (not exact match) also recovers anyone missed during a brief
+ * downtime.
+ */
+export async function autoPunchOutEndedShifts(): Promise<number> {
+  const nowMin = istMinutesOfDay();
+  const res = await SimpleDatabase.query(
+    `SELECT a.id AS attendance_id, a.user_id, s.end_time
+       FROM attendance a
+       JOIN subscriptions sub ON sub.user_id = a.user_id AND sub.status = 'ACTIVE'
          AND CURRENT_DATE BETWEEN sub.start_date AND sub.end_date
-       LIMIT 1`,
-      [userId]
-    );
-    const shiftRow = subRes.rows[0];
-    if (!shiftRow?.end_time) continue;
+       JOIN membership_plans mp ON mp.id = sub.plan_id
+       JOIN shifts s ON s.id = mp.shift_id
+      WHERE a.check_out_time IS NULL AND s.end_time IS NOT NULL`,
+    []
+  );
 
-    const userEnd = parseTimeToMinutes(String(shiftRow.end_time));
-    if (userEnd !== targetEnd) continue;
+  let count = 0;
+  for (const row of res.rows) {
+    const endMin = parseTimeToMinutes(String(row.end_time));
+    if (endMin > nowMin) continue;
 
-    const saved = await repo.checkoutAttendance(Number(row.id));
+    const saved = await repo.checkoutAttendance(Number(row.attendance_id));
     if (saved) {
       await recordSessionCompletion(saved);
-      await evaluateAndAward(userId);
+      await evaluateAndAward(Number(row.user_id));
       void notifyPunchOutIfNeeded(
-        userId,
+        Number(row.user_id),
         new Date(saved.check_in_time),
         new Date(saved.check_out_time)
       );
