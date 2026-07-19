@@ -278,35 +278,48 @@ export async function runStudentOfTheMonthNotifications(): Promise<number> {
 
   const data = await getStudentOfTheMonth(year, month);
   const monthLabel = formatBillingMonth(year, month);
+
+  // Need at least one real winner to announce anything.
+  if (!data.winners.some((w: any) => w.userId && w.value > 0)) return 0;
+
+  // ONE combined broadcast per month for all three categories, so each member
+  // gets a single MARKETING message instead of one per category (which tripped
+  // Meta's per-user frequency cap). Dedup on the month label.
+  const already = await SimpleDatabase.query(
+    `SELECT 1 FROM whatsapp_messages
+      WHERE template_name = $1 AND variables->>'1' = $2
+        AND message_status IN ('sent', 'pending', 'delivered', 'read')
+      LIMIT 1`,
+    [TEMPLATES.SOTM_BROADCAST, monthLabel]
+  );
+  if (already.rows.length > 0) return 0;
+
+  const byCategory = new Map<string, any>();
+  for (const w of data.winners) byCategory.set(w.category, w);
+  const nameOf = (cat: string) => {
+    const w = byCategory.get(cat);
+    return w?.userId && w.value > 0 ? String(w.fullName).trim() : "—";
+  };
+  const valueOf = (cat: string) => {
+    const w = byCategory.get(cat);
+    return w?.userId && w.value > 0 ? String(w.valueLabel) : "—";
+  };
+
+  const variables = {
+    "1": monthLabel,
+    "2": nameOf("HOURS"),
+    "3": valueOf("HOURS"),
+    "4": nameOf("ATTENDANCE"),
+    "5": valueOf("ATTENDANCE"),
+    "6": nameOf("STREAK"),
+    "7": valueOf("STREAK"),
+  };
+
   const audience = await loadAllLibraryBroadcastRecipients();
   if (audience.length === 0) return 0;
-
-  let queued = 0;
-  for (const winner of data.winners) {
-    if (!winner.userId || !winner.fullName || winner.value <= 0) continue;
-
-    const already = await SimpleDatabase.query(
-      `SELECT COUNT(*)::int AS cnt FROM whatsapp_messages
-       WHERE template_name = $1
-         AND variables->>'2' = $2 AND variables->>'3' = $3
-         AND message_status IN ('sent', 'pending')`,
-      [TEMPLATES.STUDENT_OF_MONTH, monthLabel, winner.categoryLabel]
-    );
-    if (Number(already.rows[0]?.cnt ?? 0) > 0) continue;
-
-    const variables = {
-      "1": String(winner.fullName).trim(),
-      "2": monthLabel,
-      "3": winner.categoryLabel,
-      "4": winner.valueLabel,
-    };
-
-    const recipients = audience.map((r) => ({ ...r, variables }));
-    await queueTemplateMessages(recipients, TEMPLATES.STUDENT_OF_MONTH, "student_of_month");
-    queued += recipients.length;
-  }
-
-  return queued;
+  const recipients = audience.map((r) => ({ ...r, variables }));
+  await queueTemplateMessages(recipients, TEMPLATES.SOTM_BROADCAST, "sotm_broadcast");
+  return recipients.length;
 }
 
 export async function notifyNewMemberFromUserId(userId: number): Promise<void> {
