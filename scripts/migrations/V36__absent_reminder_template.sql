@@ -3,9 +3,11 @@
 -- Idempotent.
 INSERT INTO whatsapp_templates (template_name, template_language, template_status, template_category, template_content, footer_text, variables, org_id) VALUES
 ('library_absent_reminder', 'en', 'approved', 'UTILITY',
-'Hi *{{1}}*, we missed you at the library today.
+'Dear *{{1}}*,
 
-Every day you show up is a step closer to your goal. Don''t break your momentum — come back tomorrow and keep your preparation on track. Your seat is ready for you! 📚
+Our records show that you did not visit the library today. Regular, consistent study is essential for steady progress toward your goals.
+
+We encourage you to resume your routine tomorrow. Your reserved seat will be available.
 
 📚 *BR Ambedkar Library, Nadipar*
 *Unit of Udayan Public School, Japla*',

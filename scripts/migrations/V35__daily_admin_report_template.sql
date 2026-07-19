@@ -6,17 +6,20 @@ INSERT INTO whatsapp_templates (
   template_content, header_type, header_content, footer_text, variables, org_id
 ) VALUES (
   'library_daily_admin_report', 'en', 'approved', 'UTILITY',
-  'Daily Report — {{1}}
+  '*Today''s Overall Report — {{1}}*
 
-Attendance today: {{2}}
-Fees collected today: {{3}}
-Pending dues: {{4}}
-Total students: {{5}}
+Attendance today: *{{2}}*
+Fees collected today: *{{3}}*
+Pending dues: *{{4}}*
+Total students: *{{5}}*
 
-Full member-wise details (punch-in/out times, paid & pending, next billing date) are in the attached PDF.',
+Full member-wise details (punch-in/out times, paid & pending, next billing date) are in the attached PDF.
+
+📚 *BR Ambedkar Library, Nadipar*
+*Unit of Udayan Public School, Japla*',
   'DOCUMENT',
   NULL,
-  'Automated daily report',
+  'This is an automated message. Please do not reply.',
   '[{"name":"{{1}}","type":"text","example":"Sat, 19 Jul 2026"},{"name":"{{2}}","type":"text","example":"37 member(s)"},{"name":"{{3}}","type":"text","example":"₹4,500 from 9 payment(s)"},{"name":"{{4}}","type":"text","example":"6 member(s) • ₹3,000"},{"name":"{{5}}","type":"text","example":"128"}]'::jsonb,
   'library'
 )

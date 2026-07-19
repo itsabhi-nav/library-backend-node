@@ -8,7 +8,6 @@ import {
   runExamCountdownReminders,
   runStudentOfTheMonthNotifications,
 } from "../library-notifications.service";
-import { runDailyAdminReport } from "../../reports/daily-report.service";
 
 /** Scheduled WhatsApp notifications — all times IST (Asia/Kolkata). */
 export function startWhatsAppScheduledJobs(): void {
@@ -92,21 +91,8 @@ export function startWhatsAppScheduledJobs(): void {
     { timezone: "Asia/Kolkata" }
   );
 
-  // Daily admin report: 11:00 PM IST (after all shifts have ended). Builds a
-  // full-day PDF (shift-wise attendance + fees paid/pending + next auto
-  // fee-generation) and WhatsApps it to every admin number as a private document.
-  cron.schedule(
-    "0 23 * * *",
-    async () => {
-      try {
-        const sent = await runDailyAdminReport();
-        logger.info({ sent }, "Daily admin report WhatsApp dispatched");
-      } catch (error) {
-        logger.error({ error }, "Daily admin report job failed");
-      }
-    },
-    { timezone: "Asia/Kolkata" }
-  );
+  // NOTE: the daily admin report + absent reminder are NOT fixed-time crons — they
+  // fire relative to the last shift's end time and live in end-of-day.job.ts.
 
   logger.info("WhatsApp scheduled notification crons started (IST)");
 }
