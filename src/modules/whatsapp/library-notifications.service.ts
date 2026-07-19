@@ -165,14 +165,22 @@ export async function runSubscriptionExpiryReminders(): Promise<number> {
     const endDate = String(row.end_date).substring(0, 10);
     const endDateLabel = formatDateShortIST(endDate);
 
-    // This cron runs daily, but a member should get ONE reminder per expiry —
-    // not the same message every day for the whole 10-day window. Skip if we've
-    // already notified them for this exact end date.
+    // Daily countdown over the last 10 days. We fold the "days left" into the
+    // "valid until" value (variable 3) so no Meta template change is needed —
+    // e.g. "30 Jun 2026 · 5 days left". Because that string changes every day,
+    // the dedup below naturally allows one message per day (and blocks a repeat
+    // on the same day), giving a real countdown instead of a single reminder.
+    const daysLeft = Math.max(0, daysBetween(endDate, today));
+    const countdown =
+      daysLeft === 0 ? "expires today" : `${daysLeft} day${daysLeft === 1 ? "" : "s"} left`;
+    const validUntilLabel = `${endDateLabel} · ${countdown}`;
+
     const already = await SimpleDatabase.query(
       `SELECT 1 FROM whatsapp_messages
        WHERE student_id = $1 AND template_name = $2
-         AND variables->>'3' = $3 AND message_status = 'sent' LIMIT 1`,
-      [Number(row.id), TEMPLATES.SUBSCRIPTION_EXPIRY, endDateLabel]
+         AND variables->>'3' = $3
+         AND message_status IN ('sent', 'pending', 'delivered', 'read') LIMIT 1`,
+      [Number(row.id), TEMPLATES.SUBSCRIPTION_EXPIRY, validUntilLabel]
     );
     if (already.rows.length > 0) continue;
 
@@ -183,7 +191,7 @@ export async function runSubscriptionExpiryReminders(): Promise<number> {
       variables: {
         "1": String(row.full_name).trim(),
         "2": String(row.plan_name),
-        "3": endDateLabel,
+        "3": validUntilLabel,
       },
     });
   }
