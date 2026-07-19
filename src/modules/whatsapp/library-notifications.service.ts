@@ -146,12 +146,17 @@ export async function runAbsentReminders(): Promise<number> {
 
   const recipients = res.rows
     .filter((r: any) => r.phone_number)
-    .map((r: any) => ({
-      phoneNumber: String(r.phone_number),
-      id: Number(r.id),
-      name: r.full_name,
-      variables: { "1": String(r.full_name ?? "").trim() },
-    }));
+    .map((r: any) => {
+      const name = String(r.full_name ?? "").trim();
+      // Bilingual template: {{1}} = name in the English section, {{2}} = name in
+      // the Hindi section (both the same member name).
+      return {
+        phoneNumber: String(r.phone_number),
+        id: Number(r.id),
+        name: r.full_name,
+        variables: { "1": name, "2": name },
+      };
+    });
 
   await queueTemplateMessages(recipients, TEMPLATES.ABSENT_REMINDER, "absent_reminder");
   return recipients.length;
