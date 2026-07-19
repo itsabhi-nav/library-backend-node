@@ -9,6 +9,7 @@ import { startAutoFeeGenerationJob } from "./modules/fees/jobs/fee-generation.jo
 import { startWhatsAppMaintenanceJobs } from "./modules/whatsapp/jobs/maintenance.job";
 import { startWhatsAppScheduledJobs } from "./modules/whatsapp/jobs/scheduled-notifications.job";
 import { startAutoPunchOutJob } from "./modules/attendance/jobs/auto-punch-out.job";
+import { startAbsentReminderJob } from "./modules/whatsapp/jobs/absent-reminder.job";
 import { startAchievementEvaluationJob } from "./modules/achievements/jobs/achievement-evaluation.job";
 
 validateProductionSecrets();
@@ -36,6 +37,9 @@ const server = app.listen(port, async () => {
   startAchievementEvaluationJob();
   void startAutoPunchOutJob().catch((error) => {
     logger.error({ error }, "Failed to start auto punch-out scheduler");
+  });
+  void startAbsentReminderJob().catch((error) => {
+    logger.error({ error }, "Failed to start absent reminder scheduler");
   });
 });
 

@@ -120,6 +120,44 @@ export async function runFeeReminders(): Promise<number> {
 }
 
 /**
+ * Motivational "we missed you today" nudge to every currently-enrolled member who
+ * did NOT punch in today. Scheduled ~2 min after the last shift ends, so no one
+ * still inside their shift is wrongly flagged absent. Keeps attendance continuity.
+ */
+export async function runAbsentReminders(): Promise<number> {
+  const today = istToday();
+  const res = await SimpleDatabase.query(
+    `SELECT u.id, u.full_name, u.phone_number
+       FROM users u
+      WHERE u.role = 'MEMBER' AND u.is_active = true
+        AND u.phone_number IS NOT NULL AND TRIM(u.phone_number) <> ''
+        AND EXISTS (
+          SELECT 1 FROM subscriptions s
+           WHERE s.user_id = u.id AND s.status = 'ACTIVE'
+             AND CURRENT_DATE BETWEEN s.start_date AND s.end_date
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM attendance a
+           WHERE a.user_id = u.id
+             AND DATE(a.check_in_time AT TIME ZONE 'Asia/Kolkata') = $1::date
+        )`,
+    [today]
+  );
+
+  const recipients = res.rows
+    .filter((r: any) => r.phone_number)
+    .map((r: any) => ({
+      phoneNumber: String(r.phone_number),
+      id: Number(r.id),
+      name: r.full_name,
+      variables: { "1": String(r.full_name ?? "").trim() },
+    }));
+
+  await queueTemplateMessages(recipients, TEMPLATES.ABSENT_REMINDER, "absent_reminder");
+  return recipients.length;
+}
+
+/**
  * Send ONE combined "Achievement Unlocked" message covering every newly-earned
  * badge (names comma-separated), instead of one message per badge. The template
  * is a MARKETING category, so multiple rapid sends to the same member trip Meta's

@@ -8,6 +8,7 @@ import { TtlCache } from "../../shared/ttlCache";
 import * as repo from "./booking.repository";
 import * as authRepo from "../auth/auth.repository";
 import { invalidatePlansCache } from "../subscriptions/subscriptions.service";
+import { rescheduleShiftJobs } from "../attendance/jobs/shift-schedules";
 import type { BookingRequestInput, ShiftRequestInput } from "./booking.validator";
 
 // Seat and shift catalogs are read on every seat-map / booking view but only
@@ -200,6 +201,7 @@ export async function addShift(shift: { name?: string; startTime: string; endTim
   await repo.upsertBackingPlanForShift(Number(row.id), name, price);
   invalidateShiftsCache();
   invalidatePlansCache();
+  void rescheduleShiftJobs();
   return serializeShift(row);
 }
 
@@ -212,6 +214,7 @@ export async function updateShift(id: number, request: ShiftRequestInput) {
   await repo.upsertBackingPlanForShift(id, name, price);
   invalidateShiftsCache();
   invalidatePlansCache();
+  void rescheduleShiftJobs();
   return serializeShift(row);
 }
 
@@ -221,6 +224,7 @@ export async function deleteShift(id: number) {
   await repo.deactivateBackingPlanForShift(id);
   invalidateShiftsCache();
   invalidatePlansCache();
+  void rescheduleShiftJobs();
 }
 
 /** Permanently delete a shift — only when no member/booking still depends on it. */
@@ -236,6 +240,7 @@ export async function removeShift(id: number) {
   await repo.hardDeleteShift(id);
   invalidateShiftsCache();
   invalidatePlansCache();
+  void rescheduleShiftJobs();
 }
 
 export async function getBookingsByDate(date: string) {
