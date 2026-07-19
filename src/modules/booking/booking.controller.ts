@@ -59,6 +59,11 @@ export const deleteShift = createHandler(async (req, res) => {
   res.status(204).send();
 });
 
+export const removeShift = createHandler(async (req, res) => {
+  await svc.removeShift(parseId(req.params.id));
+  res.status(204).send();
+});
+
 export const getBookingsByDate = createHandler(async (req, res) => {
   const date = String(req.params.date);
   res.status(200).json(await svc.getBookingsByDate(date));

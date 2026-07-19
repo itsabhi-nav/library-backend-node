@@ -149,6 +149,19 @@ export async function runSubscriptionExpiryReminders(): Promise<number> {
   for (const row of res.rows) {
     if (!row.phone_number) continue;
     const endDate = String(row.end_date).substring(0, 10);
+    const endDateLabel = formatDateShortIST(endDate);
+
+    // This cron runs daily, but a member should get ONE reminder per expiry —
+    // not the same message every day for the whole 10-day window. Skip if we've
+    // already notified them for this exact end date.
+    const already = await SimpleDatabase.query(
+      `SELECT 1 FROM whatsapp_messages
+       WHERE student_id = $1 AND template_name = $2
+         AND variables->>'3' = $3 AND message_status = 'sent' LIMIT 1`,
+      [Number(row.id), TEMPLATES.SUBSCRIPTION_EXPIRY, endDateLabel]
+    );
+    if (already.rows.length > 0) continue;
+
     recipients.push({
       phoneNumber: String(row.phone_number),
       id: Number(row.id),
@@ -156,7 +169,7 @@ export async function runSubscriptionExpiryReminders(): Promise<number> {
       variables: {
         "1": String(row.full_name).trim(),
         "2": String(row.plan_name),
-        "3": formatDateShortIST(endDate),
+        "3": endDateLabel,
       },
     });
   }
@@ -193,6 +206,9 @@ export async function runExamCountdownReminders(): Promise<number> {
       examDate = row.def_date ? String(row.def_date).substring(0, 10) : null;
     }
     if (!examName || !examDate) continue;
+    // Every member is seeded with a placeholder target at registration; don't
+    // send a countdown until they've actually set a real exam.
+    if (examName.trim() === DEFAULT_EXAM_NAME) continue;
 
     let daysLeft = daysBetween(examDate, today);
     if (daysLeft < 0) daysLeft = 0;

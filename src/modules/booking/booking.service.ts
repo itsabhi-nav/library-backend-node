@@ -4,9 +4,26 @@ import { SimpleDatabase } from "../../core/database/SimpleDatabase";
 import { serializeBooking, serializeSeat, serializeShift } from "../../shared/serializers";
 import { shiftBlocksSeat, type ShiftTimes } from "../../shared/shift-utils";
 import { istToday } from "../../shared/ist";
+import { TtlCache } from "../../shared/ttlCache";
 import * as repo from "./booking.repository";
 import * as authRepo from "../auth/auth.repository";
+import { invalidatePlansCache } from "../subscriptions/subscriptions.service";
 import type { BookingRequestInput, ShiftRequestInput } from "./booking.validator";
+
+// Seat and shift catalogs are read on every seat-map / booking view but only
+// change on admin edits — cache the raw rows and invalidate on any mutation.
+const seatsCache = new TtlCache<any[]>(60000);
+const shiftsCache = new TtlCache<any[]>(60000);
+const SEATS_KEY = "all";
+const SHIFTS_KEY = "all";
+function invalidateSeatsCache() {
+  seatsCache.delete(SEATS_KEY);
+}
+function invalidateShiftsCache() {
+  shiftsCache.delete(SHIFTS_KEY);
+}
+const cachedSeats = () => seatsCache.getOrSet(SEATS_KEY, () => repo.findAllSeats());
+const cachedShifts = () => shiftsCache.getOrSet(SHIFTS_KEY, () => repo.findAllShifts());
 
 async function loadBookingJson(row: any) {
   const [user, seat, shift, sub] = await Promise.all([
@@ -46,7 +63,7 @@ async function loadBookingsJson(rows: any[]) {
 }
 
 export async function getAllSeats() {
-  const rows = await repo.findAllSeats();
+  const rows = await cachedSeats();
   return rows.map(serializeSeat);
 }
 
@@ -98,13 +115,40 @@ export async function getAssignableSeats(
   shiftId?: number | null,
   planId?: number | null
 ) {
-  const seats = await repo.findAllSeats();
   const exclude = excludeUserId ?? null;
   const targetShift = await resolveTargetShift(shiftId ?? null, planId ?? null);
+
+  // Fetch everything needed up front in a couple of queries, then decide each
+  // seat in memory — previously this issued one occupancy query per seat
+  // (O(seats) sequential Neon round-trips, the main cause of a slow seat map).
+  const seats = await cachedSeats();
+
+  if (!targetShift) {
+    // No shift context: a seat is blocked if it's assigned to any active member,
+    // regardless of subscription (matches isSeatTakenByAnotherActiveMember).
+    const takenSeatIds = await repo.findSeatIdsAssignedToActiveMembers(exclude);
+    return seats
+      .filter((s) => s.status !== "MAINTENANCE" && !takenSeatIds.has(Number(s.id)))
+      .map(serializeSeat);
+  }
+
+  // Shift context: block only when an active-subscription occupant's shift window
+  // overlaps the target (matches findActiveSeatOccupants).
+  const allAssignments = await repo.findAllActiveSeatAssignments();
+  const occupantsBySeat = new Map<number, any[]>();
+  for (const a of allAssignments) {
+    if (exclude != null && Number(a.user_id) === exclude) continue;
+    const seatId = Number(a.seat_id);
+    const list = occupantsBySeat.get(seatId);
+    if (list) list.push(a);
+    else occupantsBySeat.set(seatId, [a]);
+  }
+
   const result = [];
   for (const s of seats) {
     if (s.status === "MAINTENANCE") continue;
-    const blocked = await isSeatBlockedForShift(Number(s.id), targetShift, exclude);
+    const occupants = occupantsBySeat.get(Number(s.id)) ?? [];
+    const blocked = occupants.some((o) => shiftBlocksSeat(occupantShiftTimes(o), targetShift));
     if (!blocked) result.push(serializeSeat(s));
   }
   return result;
@@ -115,33 +159,83 @@ export async function addSeat(body: { seatNumber?: string; status?: string; hasP
   const status = body.status ?? "AVAILABLE";
   const hasPowerOutlet = body.hasPowerOutlet ?? true;
   const row = await repo.insertSeat(seatNumber, status, hasPowerOutlet);
+  invalidateSeatsCache();
   return serializeSeat(row);
 }
 
 export async function updateSeatStatus(seatId: number, status: string) {
   const row = await repo.updateSeatStatus(seatId, status);
   if (!row) throw AppError.badRequest("Seat not found");
+  invalidateSeatsCache();
   return serializeSeat(row);
 }
 
 export async function getAllShifts() {
-  return (await repo.findAllShifts()).map(serializeShift);
+  return (await cachedShifts()).map(serializeShift);
 }
 
-export async function addShift(shift: { name: string; startTime: string; endTime: string }) {
-  const row = await repo.insertShift(shift.name, shift.startTime, shift.endTime);
+const CATEGORY_LABELS: Record<string, string> = {
+  MORNING: "Morning",
+  EVENING: "Evening",
+  FULL_DAY: "Full Day",
+};
+
+function normalizeCategory(category?: string | null): string {
+  const c = String(category ?? "").toUpperCase();
+  return c in CATEGORY_LABELS ? c : "MORNING";
+}
+
+/** Human-readable, descriptive name derived from the category + time window. */
+function buildShiftName(category: string, startTime: string, endTime: string, fallback?: string): string {
+  if (fallback && fallback.trim()) return fallback.trim();
+  const label = CATEGORY_LABELS[category] ?? "Shift";
+  return `${label} ${startTime.substring(0, 5)}-${endTime.substring(0, 5)}`;
+}
+
+export async function addShift(shift: { name?: string; startTime: string; endTime: string; price?: number; category?: string }) {
+  const price = Math.max(0, Number(shift.price) || 0);
+  const category = normalizeCategory(shift.category);
+  const name = buildShiftName(category, shift.startTime, shift.endTime, shift.name);
+  const row = await repo.insertShift(name, shift.startTime, shift.endTime, price, category);
+  await repo.upsertBackingPlanForShift(Number(row.id), name, price);
+  invalidateShiftsCache();
+  invalidatePlansCache();
   return serializeShift(row);
 }
 
 export async function updateShift(id: number, request: ShiftRequestInput) {
-  const row = await repo.updateShift(id, request.name, request.startTime, request.endTime);
+  const price = Math.max(0, Number(request.price) || 0);
+  const category = normalizeCategory(request.category);
+  const name = buildShiftName(category, request.startTime, request.endTime, request.name);
+  const row = await repo.updateShift(id, name, request.startTime, request.endTime, price, category);
   if (!row) throw AppError.badRequest("Shift not found");
+  await repo.upsertBackingPlanForShift(id, name, price);
+  invalidateShiftsCache();
+  invalidatePlansCache();
   return serializeShift(row);
 }
 
 export async function deleteShift(id: number) {
   const row = await repo.deactivateShift(id);
   if (!row) throw AppError.badRequest("Shift not found");
+  await repo.deactivateBackingPlanForShift(id);
+  invalidateShiftsCache();
+  invalidatePlansCache();
+}
+
+/** Permanently delete a shift — only when no member/booking still depends on it. */
+export async function removeShift(id: number) {
+  const shift = await repo.findShiftById(id);
+  if (!shift) throw AppError.badRequest("Shift not found");
+  const deps = await repo.countShiftDependents(id);
+  if (deps > 0) {
+    throw AppError.badRequest(
+      `Cannot delete "${shift.name}" — ${deps} member${deps === 1 ? "" : "s"}/booking${deps === 1 ? "" : "s"} still use it. Deactivate it instead.`
+    );
+  }
+  await repo.hardDeleteShift(id);
+  invalidateShiftsCache();
+  invalidatePlansCache();
 }
 
 export async function getBookingsByDate(date: string) {
@@ -272,6 +366,7 @@ export async function bulkSetCapacity(total: number) {
       }
     }
   });
+  invalidateSeatsCache();
 }
 
 /** Used by attendance module for "today's" booking lookup. */

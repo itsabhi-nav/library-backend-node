@@ -113,7 +113,17 @@ export async function searchStudents(
   const total = Number(countRes.rows[0].c);
 
   const rowsRes = await SimpleDatabase.query(
-    `SELECT ${USER_COLUMNS} FROM users WHERE ${where}
+    `SELECT ${USER_COLUMNS},
+       (SELECT mp.shift_id FROM subscriptions sub
+          JOIN membership_plans mp ON mp.id = sub.plan_id
+         WHERE sub.user_id = users.id AND sub.status = 'ACTIVE'
+           AND CURRENT_DATE BETWEEN sub.start_date AND sub.end_date
+         ORDER BY sub.id DESC LIMIT 1) AS current_shift_id,
+       (SELECT sub.discount_percent FROM subscriptions sub
+         WHERE sub.user_id = users.id AND sub.status = 'ACTIVE'
+           AND CURRENT_DATE BETWEEN sub.start_date AND sub.end_date
+         ORDER BY sub.id DESC LIMIT 1) AS current_discount_percent
+     FROM users WHERE ${where}
       ORDER BY created_at DESC
       LIMIT $3 OFFSET $4`,
     [search, status, size, page * size]

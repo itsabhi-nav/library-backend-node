@@ -3,7 +3,7 @@ import { SimpleDatabase } from "../../core/database/SimpleDatabase";
 import { SHIFT_COLUMNS } from "../booking/booking.repository";
 
 const PLAN_COLUMNS = `id, name, description, duration_days, price, shift_id, is_active, created_at`;
-const SUB_COLUMNS = `id, user_id, plan_id, start_date, end_date, status, paid_amount, payment_method, payment_status, created_at`;
+const SUB_COLUMNS = `id, user_id, plan_id, start_date, end_date, status, paid_amount, payment_method, payment_status, discount_percent, created_at`;
 
 type Runner = Pick<typeof SimpleDatabase, "query"> | PoolClient;
 
@@ -160,13 +160,14 @@ export async function insertSubscription(
     endDate: string;
     paidAmount: number;
     paymentMethod: string;
+    discountPercent?: number;
   },
   runner?: Runner
 ) {
   const res = await run(
     runner,
-    `INSERT INTO subscriptions (user_id, plan_id, start_date, end_date, status, paid_amount, payment_method, payment_status)
-     VALUES ($1, $2, $3, $4, 'ACTIVE', $5, $6, 'PAID')
+    `INSERT INTO subscriptions (user_id, plan_id, start_date, end_date, status, paid_amount, payment_method, payment_status, discount_percent)
+     VALUES ($1, $2, $3, $4, 'ACTIVE', $5, $6, 'PAID', $7)
      RETURNING ${SUB_COLUMNS}`,
     [
       fields.userId,
@@ -175,6 +176,7 @@ export async function insertSubscription(
       fields.endDate,
       fields.paidAmount,
       fields.paymentMethod,
+      fields.discountPercent ?? 0,
     ]
   );
   return res.rows[0];

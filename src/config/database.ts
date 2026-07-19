@@ -1,5 +1,5 @@
 import { Pool, PoolClient, types as pgTypes } from "pg";
-import { buildDatabaseUrl } from "./env";
+import { buildDatabaseUrl, getNumber } from "./env";
 import { logger } from "./logger";
 
 // Return DATE (OID 1082) columns as raw 'YYYY-MM-DD' strings instead of JS Date
@@ -21,10 +21,16 @@ const connectionString = buildDatabaseUrl()
 
 export const pool = new Pool({
   connectionString,
-  max: 5,
+  max: getNumber(process.env.DB_POOL_MAX, 20),
+  // min:0 lets the pool drain to zero when idle so Neon's serverless compute can
+  // auto-suspend — this is what keeps compute usage (and cost) low. We do NOT
+  // keep the DB warm on a timer.
   min: 0,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 30000,
+  // Long acquire timeout is the key to "no downtime, no manual refresh": when
+  // Neon is suspended, the first request simply waits (up to 60s) for the
+  // compute to wake instead of erroring. Cold requests are slow, never broken.
+  connectionTimeoutMillis: getNumber(process.env.DB_CONNECTION_TIMEOUT_MS, 60000),
   ssl: { rejectUnauthorized: false },
 });
 

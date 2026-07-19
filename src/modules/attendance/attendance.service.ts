@@ -3,7 +3,7 @@ import { SimpleDatabase } from "../../core/database/SimpleDatabase";
 import { evaluateAndAward } from "../achievements/achievements.service";
 import { toIsoOrNull } from "../../shared/serializers";
 import { istToday, istDateFromInstant } from "../../shared/ist";
-import { shiftBlocksSeat, parseTimeToMinutes, type ShiftTimes } from "../../shared/shift-utils";
+import { parseTimeToMinutes } from "../../shared/shift-utils";
 import { findByMemberId } from "../auth/auth.service";
 import {
   notifyPunchInIfNeeded,
@@ -179,45 +179,26 @@ export async function getSeatIdsOccupiedByPunchIn() {
   return repo.findSeatIdsWithActivePunchIn();
 }
 
-function rowShiftTimes(row: { start_time?: string | null; end_time?: string | null }): ShiftTimes | null {
-  if (!row.start_time || !row.end_time) return null;
-  return {
-    startTime: String(row.start_time).substring(0, 8),
-    endTime: String(row.end_time).substring(0, 8),
-  };
-}
-
-function matchesShiftFilter(row: { start_time?: string | null; end_time?: string | null }, target: ShiftTimes | null) {
-  if (!target) return true;
-  return shiftBlocksSeat(rowShiftTimes(row), target);
-}
-
-export async function getSeatMapSnapshot(shiftId: number | null) {
-  let targetShift: ShiftTimes | null = null;
-  if (shiftId != null) {
-    const shift = await bookingRepo.findShiftById(shiftId);
-    if (!shift) throw AppError.badRequest("Shift not found");
-    targetShift = {
-      startTime: String(shift.start_time).substring(0, 8),
-      endTime: String(shift.end_time).substring(0, 8),
-    };
-  }
-
+/**
+ * Live seat map. Deliberately shift-agnostic: a seat counts as occupied only
+ * when a member is currently punched in there; every other seat reads as
+ * available. (Time-overlap logic still governs seat *assignment* elsewhere.)
+ * `shiftId` is accepted for backward-compatibility but no longer filters.
+ */
+export async function getSeatMapSnapshot(_shiftId: number | null) {
   const [seats, assignments, punchIns] = await Promise.all([
     bookingRepo.findAllSeats(),
     bookingRepo.findAllActiveSeatAssignments(),
     repo.findActivePunchInsWithDetails(),
   ]);
 
-  const filteredAssignments = assignments.filter((a) => matchesShiftFilter(a, targetShift));
-  const filteredPunchIns = punchIns.filter((p) => matchesShiftFilter(p, targetShift));
-
-  const punchedInSeats = filteredPunchIns.map((p) => ({
+  const punchedInSeats = punchIns.map((p) => ({
     seatId: Number(p.seat_id),
     memberId: String(p.member_id),
   }));
 
-  const reservedSeats = filteredAssignments.map((a) => ({
+  // Still surfaced (who a seat belongs to) but does NOT mark a seat occupied.
+  const reservedSeats = assignments.map((a) => ({
     seatId: Number(a.seat_id),
     memberId: String(a.member_id),
   }));
@@ -228,7 +209,7 @@ export async function getSeatMapSnapshot(shiftId: number | null) {
   const available = Math.max(0, total - punchedIn);
 
   return {
-    shiftId,
+    shiftId: null,
     stats: { total, available, reserved: reservedSeatIds.length, punchedIn },
     punchedInSeats,
     reservedSeats,

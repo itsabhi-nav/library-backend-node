@@ -7,9 +7,11 @@ export const bookingRequestSchema = z.object({
 });
 
 export const shiftRequestSchema = z.object({
-  name: z.string().min(1, "name is required"),
+  name: z.string().optional(),
   startTime: z.string().min(1, "startTime is required"),
   endTime: z.string().min(1, "endTime is required"),
+  price: z.number().min(0).optional(),
+  category: z.enum(["MORNING", "EVENING", "FULL_DAY"]).optional(),
 });
 
 export const seatBodySchema = z.object({

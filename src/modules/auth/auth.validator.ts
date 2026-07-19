@@ -41,6 +41,7 @@ export const studentRegisterSchema = z.object({
   assignSeat: z.boolean().optional().nullable(),
   seatId: z.number().int().optional().nullable(),
   paymentMethod: z.string().optional().nullable(),
+  discountPercent: z.number().min(0).max(100).optional().nullable(),
   password: z.string().optional().nullable(),
 });
 

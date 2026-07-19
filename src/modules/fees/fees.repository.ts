@@ -20,7 +20,7 @@ export async function getConfigValue(key: string): Promise<string | null> {
 
 export async function findActiveMemberSubscriptions() {
   const res = await SimpleDatabase.query(
-    `SELECT s.id, s.user_id, s.plan_id, s.start_date, s.end_date, s.status,
+    `SELECT s.id, s.user_id, s.plan_id, s.start_date, s.end_date, s.status, s.discount_percent,
             p.name AS plan_name_ref, p.price AS plan_price, p.duration_days
      FROM subscriptions s
      JOIN users u ON u.id = s.user_id
@@ -53,7 +53,7 @@ export async function extendSubscriptionEndDate(
 
 export async function findActiveSubscriptionsOverlappingMonth(monthStart: string, monthEnd: string) {
   const res = await SimpleDatabase.query(
-    `SELECT s.id, s.user_id, s.plan_id, s.start_date, s.end_date, s.status,
+    `SELECT s.id, s.user_id, s.plan_id, s.start_date, s.end_date, s.status, s.discount_percent,
             p.id AS plan_id_ref, p.name AS plan_name_ref, p.price AS plan_price
      FROM subscriptions s
      JOIN users u ON u.id = s.user_id

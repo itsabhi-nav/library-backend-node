@@ -54,6 +54,9 @@ export function serializeUser(row: any, seat?: SeatRow | null): any {
     lastLoginAt: toIsoOrNull(row.last_login_at),
     assignedSeat: seat ? serializeSeat(seat) : null,
     createdAt: toIsoOrNull(row.created_at),
+    // Present only on the admin student directory (from the enriched list query).
+    currentShiftId: row.current_shift_id != null ? Number(row.current_shift_id) : null,
+    discountPercent: row.current_discount_percent != null ? Number(row.current_discount_percent) : null,
   };
 }
 
@@ -82,6 +85,7 @@ export function serializeShiftForPlan(row: any): any {
     name: row.name,
     startTime: formatTime(row.start_time),
     endTime: formatTime(row.end_time),
+    price: row.price != null ? toNumber(row.price) : 0,
     isActive: row.is_active,
   };
 }
@@ -93,6 +97,8 @@ export function serializeShift(row: any): any {
     name: row.name,
     startTime: formatTime(row.start_time),
     endTime: formatTime(row.end_time),
+    price: row.price != null ? toNumber(row.price) : 0,
+    category: row.category ?? "MORNING",
     isActive: row.is_active,
     createdAt: toIsoOrNull(row.created_at),
   };
@@ -127,6 +133,7 @@ export function serializeSubscription(row: any, planRow?: any | null, planShiftR
     paidAmount: toNumber(row.paid_amount),
     paymentMethod: row.payment_method ?? null,
     paymentStatus: row.payment_status,
+    discountPercent: row.discount_percent != null ? toNumber(row.discount_percent) : 0,
     createdAt: toIsoOrNull(row.created_at),
   };
   if (planRow) {

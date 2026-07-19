@@ -3,6 +3,7 @@ import { SimpleDatabase } from "../../core/database/SimpleDatabase";
 import { serializeFeeInvoice } from "../../shared/serializers";
 import { springPage } from "../../shared/springPage";
 import { istToday, daysInMonth, monthStart, monthEnd, addDays, isPlanBillingCycleDay } from "../../shared/ist";
+import { applyDiscount } from "../../shared/pricing";
 import * as repo from "./fees.repository";
 import type { FeePaymentInput } from "./fees.validator";
 
@@ -90,18 +91,19 @@ export async function generateForMonth(year: number, month: number) {
       skipped++;
       continue;
     }
+    const billedAmount = applyDiscount(sub.plan_price, sub.discount_percent);
     try {
       await repo.insertInvoice({
         userId,
         subscriptionId: Number(sub.id),
         billingYear: year,
         billingMonth: month,
-        amount: Number(sub.plan_price),
+        amount: billedAmount,
         planName: sub.plan_name_ref,
         dueDate,
       });
       created++;
-      createdForNotify.push({ userId, amount: Number(sub.plan_price), dueDate });
+      createdForNotify.push({ userId, amount: billedAmount, dueDate });
     } catch (e: any) {
       if (e?.code === "23505") skipped++;
       else throw e;
@@ -143,18 +145,19 @@ export async function runAutoFeeGenerationForToday() {
       continue;
     }
 
+    const billedAmount = applyDiscount(sub.plan_price, sub.discount_percent);
     try {
       await repo.insertInvoice({
         userId,
         subscriptionId: Number(sub.id),
         billingYear: year,
         billingMonth: month,
-        amount: Number(sub.plan_price),
+        amount: billedAmount,
         planName: sub.plan_name_ref,
         dueDate,
       });
       created++;
-      createdForNotify.push({ userId, amount: Number(sub.plan_price), dueDate });
+      createdForNotify.push({ userId, amount: billedAmount, dueDate });
     } catch (e: any) {
       if (e?.code === "23505") skipped++;
       else throw e;

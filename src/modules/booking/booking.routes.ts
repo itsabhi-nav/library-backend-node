@@ -18,6 +18,7 @@ bookingRouter.post("/seats/capacity", c.authenticate, c.requireAdmin, c.setSeatC
 
 bookingRouter.post("/shifts", c.authenticate, c.requireAdmin, c.addShift);
 bookingRouter.put("/shifts/:id", c.authenticate, c.requireAdmin, c.updateShift);
+bookingRouter.delete("/shifts/:id/permanent", c.authenticate, c.requireAdmin, c.removeShift);
 bookingRouter.delete("/shifts/:id", c.authenticate, c.requireAdmin, c.deleteShift);
 
 bookingRouter.post("/bookings", c.authenticate, c.createBooking);

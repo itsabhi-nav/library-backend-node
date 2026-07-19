@@ -22,9 +22,15 @@ async function loadTemplateMeta(
   }
 }
 
-async function resolveAdmissionHeaderImage(orgId: string): Promise<string | null> {
+// Meta requires a *publicly reachable* https image for an IMAGE header. If the
+// template metadata / config only has a relative asset path (e.g. /school.png),
+// the send would fail, so fall back to this hosted default to guarantee delivery.
+const DEFAULT_ADMISSION_IMAGE =
+  "https://res.cloudinary.com/dcahaaigp/image/upload/v1781909500/school_tfd0v6.png";
+
+async function resolveAdmissionHeaderImage(orgId: string): Promise<string> {
   const meta = await loadTemplateMeta("library_admission", "en", orgId);
-  if (meta?.header_type === "IMAGE" && meta.header_content?.trim()) {
+  if (meta?.header_type === "IMAGE" && meta.header_content?.trim().startsWith("http")) {
     return meta.header_content.trim();
   }
   const cfg = await SimpleDatabase.query(
@@ -32,7 +38,7 @@ async function resolveAdmissionHeaderImage(orgId: string): Promise<string | null
     []
   );
   const url = String(cfg.rows[0]?.config_value ?? "").trim();
-  return url.startsWith("http") ? url : null;
+  return url.startsWith("http") ? url : DEFAULT_ADMISSION_IMAGE;
 }
 
 function buildHeaderComponent(headerType: string, headerContent: string | null): object | null {
@@ -58,9 +64,14 @@ export async function buildTemplateComponents(
   let headerType = meta?.header_type ?? null;
   let headerContent = meta?.header_content ?? null;
 
-  if (templateName === "library_admission" && headerType !== "IMAGE") {
+  // The welcome/admission message always ships with an image header; make sure
+  // we send a valid public https image even if the template row/config is empty
+  // or points at a relative path.
+  if (templateName === "library_admission") {
     headerType = "IMAGE";
-    headerContent = (await resolveAdmissionHeaderImage(orgId)) ?? headerContent;
+    if (!headerContent || !headerContent.trim().startsWith("http")) {
+      headerContent = await resolveAdmissionHeaderImage(orgId);
+    }
   }
 
   if (headerType) {

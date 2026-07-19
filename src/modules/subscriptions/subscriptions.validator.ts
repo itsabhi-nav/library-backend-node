@@ -14,6 +14,7 @@ export const subscriptionRequestSchema = z.object({
   planId: z.number({ error: "planId is required" }),
   paidAmount: z.number({ error: "paidAmount is required" }),
   paymentMethod: z.string({ error: "paymentMethod is required" }),
+  discountPercent: z.number().min(0).max(100).optional().nullable(),
 });
 
 export type PlanRequestInput = z.infer<typeof planRequestSchema>;

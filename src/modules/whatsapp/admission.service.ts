@@ -4,8 +4,12 @@ import { whatsappConfig, SCOPE_KEY } from "./whatsapp.config";
 import * as wa from "./whatsapp.service";
 
 export async function hasAdmissionMessageBeenSent(userId: number): Promise<boolean> {
+  // Only a *successful* send should block a re-send — otherwise a single failed
+  // attempt (e.g. a bad header image) would permanently suppress the welcome
+  // message for that member. Mirrors hasTemplateBeenSent().
   const res = await SimpleDatabase.query(
-    `SELECT COUNT(*)::int AS cnt FROM whatsapp_messages WHERE student_id = $1 AND template_name = $2`,
+    `SELECT COUNT(*)::int AS cnt FROM whatsapp_messages
+     WHERE student_id = $1 AND template_name = $2 AND message_status = 'sent'`,
     [userId, wa.TEMPLATE_NAME]
   );
   return Number(res.rows[0]?.cnt ?? 0) > 0;

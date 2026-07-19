@@ -2,8 +2,17 @@ import { AppError } from "../../core/errors/AppError";
 import { SimpleDatabase } from "../../core/database/SimpleDatabase";
 import { serializePlan, serializeSubscription } from "../../shared/serializers";
 import { istToday, addDays } from "../../shared/ist";
+import { normalizeDiscountPercent } from "../../shared/pricing";
+import { TtlCache } from "../../shared/ttlCache";
 import * as repo from "./subscriptions.repository";
 import type { PlanRequestInput, SubscriptionRequestInput } from "./subscriptions.validator";
+
+// The public plans list rarely changes; cache it and invalidate on any mutation.
+const plansCache = new TtlCache<any[]>(60000);
+const PLANS_CACHE_KEY = "active";
+export function invalidatePlansCache() {
+  plansCache.delete(PLANS_CACHE_KEY);
+}
 
 function serializePlanRow(row: any) {
   return serializePlan(row, repo.planRowToShift(row));
@@ -22,7 +31,8 @@ async function loadSubscriptionsJson(rows: any[]) {
 }
 
 export async function getAllPlans() {
-  return (await repo.findActivePlans()).map(serializePlanRow);
+  const rows = await plansCache.getOrSet(PLANS_CACHE_KEY, () => repo.findActivePlans());
+  return rows.map(serializePlanRow);
 }
 
 export async function getAllPlansAdmin() {
@@ -50,6 +60,7 @@ export async function createPlan(request: PlanRequestInput) {
     isActive: request.isActive ?? true,
   });
   const full = await repo.findPlanById(Number(row.id));
+  invalidatePlansCache();
   return serializePlanRow(full);
 }
 
@@ -74,31 +85,36 @@ export async function updatePlan(id: number, request: PlanRequestInput) {
 
   await repo.updatePlanRow(id, fields);
   const full = await repo.findPlanById(id);
+  invalidatePlansCache();
   return serializePlanRow(full);
 }
 
 export async function deactivatePlan(id: number) {
   const row = await repo.deactivatePlan(id);
   if (!row) throw AppError.badRequest(`Plan not found: ${id}`);
+  invalidatePlansCache();
 }
 
 export async function getPlanStats() {
   const allPlans = await repo.findAllPlans();
   const today = istToday();
-  const stats = [];
-  for (const plan of allPlans) {
-    const count = await repo.countActiveByPlanId(Number(plan.id), today);
-    const revenue = await repo.sumRevenueByPlanId(Number(plan.id));
-    const shiftName = plan.s_name ?? "All Shifts";
-    stats.push({
-      planId: Number(plan.id),
-      planName: plan.name,
-      shiftName,
-      activeSubscriberCount: count,
-      totalRevenue: revenue,
-    });
-  }
-  return stats;
+  // Fan out the per-plan aggregates in parallel instead of serially awaiting two
+  // Neon round-trips per plan (previously O(plans) sequential latency).
+  return Promise.all(
+    allPlans.map(async (plan) => {
+      const [count, revenue] = await Promise.all([
+        repo.countActiveByPlanId(Number(plan.id), today),
+        repo.sumRevenueByPlanId(Number(plan.id)),
+      ]);
+      return {
+        planId: Number(plan.id),
+        planName: plan.name,
+        shiftName: plan.s_name ?? "All Shifts",
+        activeSubscriberCount: count,
+        totalRevenue: revenue,
+      };
+    })
+  );
 }
 
 export async function createSubscription(request: SubscriptionRequestInput) {
@@ -121,6 +137,7 @@ export async function createSubscription(request: SubscriptionRequestInput) {
         endDate,
         paidAmount: request.paidAmount,
         paymentMethod: request.paymentMethod,
+        discountPercent: normalizeDiscountPercent(request.discountPercent),
       },
       client
     );

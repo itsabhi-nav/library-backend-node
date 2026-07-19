@@ -6,9 +6,12 @@ import { generateNextMemberId } from "../../shared/memberId";
 import { serializeUser } from "../../shared/serializers";
 import { springPage } from "../../shared/springPage";
 import { istToday, addDays } from "../../shared/ist";
+import { applyDiscount, normalizeDiscountPercent } from "../../shared/pricing";
 import { notifyAdmissionIfNeeded } from "../whatsapp/admission.service";
 import { notifyNewMemberFromUserId, DEFAULT_EXAM_NAME } from "../whatsapp/library-notifications.service";
 import { validateSeatForAssignment } from "../booking/booking.service";
+import * as bookingRepo from "../booking/booking.repository";
+import { invalidateAuthUser } from "../../middlewares/authMiddleware";
 import { insertInvoice } from "../fees/fees.repository";
 import * as repo from "./auth.repository";
 import type { RegisterInput, StudentRegisterInput } from "./auth.validator";
@@ -119,24 +122,35 @@ export async function registerStudent(input: StudentRegisterInput) {
     );
     const user = insertRes.rows[0];
 
+    // The UI selects a study shift; the subscription/fee system still runs on the
+    // shift's hidden 1:1 backing plan, so resolve (creating if needed) that plan.
+    const effectivePlanId =
+      input.planId != null
+        ? input.planId
+        : input.shiftId != null
+          ? await bookingRepo.ensurePlanForShift(input.shiftId, client)
+          : null;
+
     let planName = "No plan";
     let registrationFeeNotify: { userId: number; amount: number; year: number; month: number; dueDate: string } | null = null;
-    if (input.planId != null) {
+    if (effectivePlanId != null) {
       const planRes = await client.query(
         `SELECT id, duration_days, price, name FROM membership_plans WHERE id = $1`,
-        [input.planId]
+        [effectivePlanId]
       );
-      if (planRes.rows.length === 0) throw AppError.badRequest(`Plan not found: ${input.planId}`);
+      if (planRes.rows.length === 0) throw AppError.badRequest(`Plan not found: ${effectivePlanId}`);
       const plan = planRes.rows[0];
       planName = String(plan.name);
+      const discountPercent = normalizeDiscountPercent(input.discountPercent);
+      const billedAmount = applyDiscount(plan.price, discountPercent);
       const start = istToday();
       const end = addDays(start, Number(plan.duration_days));
       const subRes = await client.query(
         `INSERT INTO subscriptions (user_id, plan_id, start_date, end_date, status,
-                                    paid_amount, payment_method, payment_status)
-         VALUES ($1, $2, $3, $4, 'ACTIVE', 0, $5, 'PENDING')
+                                    paid_amount, payment_method, payment_status, discount_percent)
+         VALUES ($1, $2, $3, $4, 'ACTIVE', 0, $5, 'PENDING', $6)
          RETURNING id`,
-        [user.id, plan.id, start, end, input.paymentMethod ?? "CASH"]
+        [user.id, plan.id, start, end, input.paymentMethod ?? "CASH", discountPercent]
       );
       const subscriptionId = Number(subRes.rows[0].id);
       const year = parseInt(start.substring(0, 4), 10);
@@ -154,7 +168,7 @@ export async function registerStudent(input: StudentRegisterInput) {
           subscriptionId,
           billingYear: year,
           billingMonth: month,
-          amount: Number(plan.price),
+          amount: billedAmount,
           planName: planName,
           dueDate,
           status: "PENDING",
@@ -164,7 +178,7 @@ export async function registerStudent(input: StudentRegisterInput) {
       );
       registrationFeeNotify = {
         userId: Number(user.id),
-        amount: Number(plan.price),
+        amount: billedAmount,
         year,
         month,
         dueDate,
@@ -229,6 +243,7 @@ export async function setActiveStatus(userId: number, active: boolean) {
   }
 
   const updated = await repo.updateUser(userId, { is_active: active });
+  invalidateAuthUser(userId);
   return serializeUserWithSeat(updated);
 }
 
@@ -261,6 +276,7 @@ export async function deleteStudent(userId: number) {
     await client.query(`DELETE FROM subscriptions WHERE user_id = $1`, [userId]);
     await client.query(`DELETE FROM users WHERE id = $1`, [userId]);
   });
+  invalidateAuthUser(userId);
 }
 
 export async function changeOwnPassword(userId: number, currentPassword: string, newPassword: string) {
@@ -291,28 +307,88 @@ export async function updateStudent(userId: number, input: StudentRegisterInput)
     if (input.dob != null) fields.dob = input.dob;
     fields.whatsapp_consent = true;
 
-    if (input.assignSeat === true) {
-      if (input.seatId != null) {
-        const subRes = await client.query(
-          `SELECT plan_id FROM subscriptions WHERE user_id = $1 AND status = 'ACTIVE'
-           AND CURRENT_DATE BETWEEN start_date AND end_date LIMIT 1`,
-          [userId]
-        );
-        const activePlanId = subRes.rows[0]?.plan_id != null ? Number(subRes.rows[0].plan_id) : null;
-        await validateSeatAssignment(client, input.seatId, userId, input.planId ?? activePlanId);
-        fields.assigned_seat_id = input.seatId;
-      } else {
-        fields.assigned_seat_id = null;
-      }
+    // Current active subscription drives plan/shift, discount and billing.
+    const subRes = await client.query(
+      `SELECT id, plan_id, discount_percent FROM subscriptions
+       WHERE user_id = $1 AND status = 'ACTIVE' AND CURRENT_DATE BETWEEN start_date AND end_date
+       ORDER BY id DESC LIMIT 1`,
+      [userId]
+    );
+    const activeSub = subRes.rows[0] ?? null;
+    const activePlanId = activeSub?.plan_id != null ? Number(activeSub.plan_id) : null;
+
+    // If the admin picked a study shift, resolve its 1:1 backing plan; otherwise
+    // keep whatever the student is already on.
+    const newPlanId =
+      input.shiftId != null
+        ? await bookingRepo.ensurePlanForShift(input.shiftId, client)
+        : (input.planId ?? activePlanId);
+
+    // Seat assignment — validated against the *new* shift so overlap rules hold
+    // even when the shift is being changed in the same edit.
+    if (input.assignSeat === true && input.seatId == null) {
+      fields.assigned_seat_id = null;
     } else if (input.seatId != null) {
-      const subRes = await client.query(
-        `SELECT plan_id FROM subscriptions WHERE user_id = $1 AND status = 'ACTIVE'
-         AND CURRENT_DATE BETWEEN start_date AND end_date LIMIT 1`,
-        [userId]
-      );
-      const activePlanId = subRes.rows[0]?.plan_id != null ? Number(subRes.rows[0].plan_id) : null;
-      await validateSeatAssignment(client, input.seatId, userId, input.planId ?? activePlanId);
+      await validateSeatAssignment(client, input.seatId, userId, newPlanId, input.shiftId ?? null);
       fields.assigned_seat_id = input.seatId;
+    }
+
+    // Apply shift / discount changes to billing.
+    const discountProvided = input.discountPercent != null;
+    const shiftChanged = input.shiftId != null && newPlanId != null && newPlanId !== activePlanId;
+    if (activeSub && (shiftChanged || discountProvided)) {
+      const nextPlanId = shiftChanged ? newPlanId : activePlanId;
+      const nextDiscount = discountProvided
+        ? normalizeDiscountPercent(input.discountPercent)
+        : Number(activeSub.discount_percent ?? 0);
+      await client.query(
+        `UPDATE subscriptions SET plan_id = $2, discount_percent = $3 WHERE id = $1`,
+        [Number(activeSub.id), nextPlanId, nextDiscount]
+      );
+    } else if (!activeSub && input.shiftId != null && newPlanId != null) {
+      // No active subscription yet (e.g. it lapsed) — enrolling on a shift here
+      // starts a fresh subscription + first invoice, mirroring registration.
+      const planRes = await client.query(
+        `SELECT id, duration_days, price, name FROM membership_plans WHERE id = $1`,
+        [newPlanId]
+      );
+      if (planRes.rows.length > 0) {
+        const plan = planRes.rows[0];
+        const discountPercent = normalizeDiscountPercent(input.discountPercent);
+        const billedAmount = applyDiscount(plan.price, discountPercent);
+        const start = istToday();
+        const end = addDays(start, Number(plan.duration_days));
+        const newSub = await client.query(
+          `INSERT INTO subscriptions (user_id, plan_id, start_date, end_date, status,
+                                      paid_amount, payment_method, payment_status, discount_percent)
+           VALUES ($1, $2, $3, $4, 'ACTIVE', 0, $5, 'PENDING', $6)
+           RETURNING id`,
+          [userId, plan.id, start, end, input.paymentMethod ?? "CASH", discountPercent]
+        );
+        const year = parseInt(start.substring(0, 4), 10);
+        const month = parseInt(start.substring(5, 7), 10);
+        const graceRes = await client.query(
+          `SELECT config_value FROM library_config WHERE config_key = 'fee_due_grace_days' LIMIT 1`
+        );
+        const graceDays = graceRes.rows[0]?.config_value
+          ? parseInt(String(graceRes.rows[0].config_value), 10)
+          : 5;
+        const dueDate = addDays(start, Number.isFinite(graceDays) ? graceDays : 5);
+        await insertInvoice(
+          {
+            userId,
+            subscriptionId: Number(newSub.rows[0].id),
+            billingYear: year,
+            billingMonth: month,
+            amount: billedAmount,
+            planName: String(plan.name),
+            dueDate,
+            status: "PENDING",
+            amountPaid: 0,
+          },
+          client
+        );
+      }
     }
 
     return repo.updateUser(userId, fields, client);

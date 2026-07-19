@@ -3,7 +3,7 @@ import { SimpleDatabase } from "../../core/database/SimpleDatabase";
 import { USER_COLUMNS, SEAT_COLUMNS } from "../auth/auth.repository";
 import { istToday } from "../../shared/ist";
 
-const SHIFT_COLUMNS = `id, name, start_time, end_time, is_active, created_at`;
+const SHIFT_COLUMNS = `id, name, start_time, end_time, price, category, is_active, created_at`;
 const BOOKING_COLUMNS = `id, user_id, seat_id, shift_id, subscription_id, booking_date, status, created_at`;
 
 type Runner = Pick<typeof SimpleDatabase, "query"> | PoolClient;
@@ -103,6 +103,18 @@ export async function findAllActiveSeatAssignments() {
   return res.rows;
 }
 
+/** Seat IDs currently assigned to any active member (ignores subscription state). */
+export async function findSeatIdsAssignedToActiveMembers(excludeUserId: number | null): Promise<Set<number>> {
+  const res = await SimpleDatabase.query(
+    `SELECT DISTINCT assigned_seat_id AS seat_id
+     FROM users
+     WHERE assigned_seat_id IS NOT NULL AND role = 'MEMBER' AND is_active = true
+       AND ($1::bigint IS NULL OR id <> $1)`,
+    [excludeUserId]
+  );
+  return new Set(res.rows.map((r) => Number(r.seat_id)));
+}
+
 export async function findAllShifts() {
   const res = await SimpleDatabase.query(`SELECT ${SHIFT_COLUMNS} FROM shifts ORDER BY id`, []);
   return res.rows;
@@ -113,20 +125,20 @@ export async function findShiftById(id: number, runner?: Runner) {
   return res.rows[0] ?? null;
 }
 
-export async function insertShift(name: string, startTime: string, endTime: string, runner?: Runner) {
+export async function insertShift(name: string, startTime: string, endTime: string, price: number, category: string, runner?: Runner) {
   const res = await run(
     runner,
-    `INSERT INTO shifts (name, start_time, end_time, is_active) VALUES ($1, $2, $3, true) RETURNING ${SHIFT_COLUMNS}`,
-    [name, startTime, endTime]
+    `INSERT INTO shifts (name, start_time, end_time, price, category, is_active) VALUES ($1, $2, $3, $4, $5, true) RETURNING ${SHIFT_COLUMNS}`,
+    [name, startTime, endTime, price, category]
   );
   return res.rows[0];
 }
 
-export async function updateShift(id: number, name: string, startTime: string, endTime: string, runner?: Runner) {
+export async function updateShift(id: number, name: string, startTime: string, endTime: string, price: number, category: string, runner?: Runner) {
   const res = await run(
     runner,
-    `UPDATE shifts SET name = $2, start_time = $3, end_time = $4 WHERE id = $1 RETURNING ${SHIFT_COLUMNS}`,
-    [id, name, startTime, endTime]
+    `UPDATE shifts SET name = $2, start_time = $3, end_time = $4, price = $5, category = $6 WHERE id = $1 RETURNING ${SHIFT_COLUMNS}`,
+    [id, name, startTime, endTime, price, category]
   );
   return res.rows[0] ?? null;
 }
@@ -138,6 +150,77 @@ export async function deactivateShift(id: number, runner?: Runner) {
     [id]
   );
   return res.rows[0] ?? null;
+}
+
+/**
+ * Each shift has a hidden 1:1 "membership plan" so subscriptions and the fee
+ * billing system (which reference membership_plans.id) keep working while the
+ * admin only ever manages shifts. Create it or keep its name/price in sync.
+ */
+export async function upsertBackingPlanForShift(
+  shiftId: number,
+  name: string,
+  price: number,
+  runner?: Runner
+): Promise<number> {
+  const existing = await run(
+    runner,
+    `SELECT id FROM membership_plans WHERE shift_id = $1 ORDER BY id LIMIT 1`,
+    [shiftId]
+  );
+  if (existing.rows[0]) {
+    const id = Number(existing.rows[0].id);
+    await run(
+      runner,
+      `UPDATE membership_plans SET name = $2, price = $3, duration_days = 30, is_active = true WHERE id = $1`,
+      [id, name, price]
+    );
+    return id;
+  }
+  const ins = await run(
+    runner,
+    `INSERT INTO membership_plans (name, description, duration_days, price, shift_id, is_active)
+     VALUES ($1, 'Study shift', 30, $2, $3, true) RETURNING id`,
+    [name, price, shiftId]
+  );
+  return Number(ins.rows[0].id);
+}
+
+export async function deactivateBackingPlanForShift(shiftId: number, runner?: Runner) {
+  await run(runner, `UPDATE membership_plans SET is_active = false WHERE shift_id = $1`, [shiftId]);
+}
+
+/** How many members still depend on this shift (via its backing plans or bookings). */
+export async function countShiftDependents(shiftId: number, runner?: Runner): Promise<number> {
+  const res = await run(
+    runner,
+    `SELECT (
+       (SELECT COUNT(*) FROM subscriptions s
+          WHERE s.plan_id IN (SELECT id FROM membership_plans WHERE shift_id = $1))
+       + (SELECT COUNT(*) FROM bookings b WHERE b.shift_id = $1)
+     ) AS cnt`,
+    [shiftId]
+  );
+  return Number(res.rows[0]?.cnt ?? 0);
+}
+
+/** Permanently remove a shift and its backing plans. Caller must ensure no deps. */
+export async function hardDeleteShift(shiftId: number, runner?: Runner) {
+  await run(runner, `DELETE FROM membership_plans WHERE shift_id = $1`, [shiftId]);
+  await run(runner, `DELETE FROM shifts WHERE id = $1`, [shiftId]);
+}
+
+/** Resolve (creating if necessary) the active backing plan id for a shift. */
+export async function ensurePlanForShift(shiftId: number, runner?: Runner): Promise<number | null> {
+  const found = await run(
+    runner,
+    `SELECT id FROM membership_plans WHERE shift_id = $1 AND is_active = true ORDER BY id LIMIT 1`,
+    [shiftId]
+  );
+  if (found.rows[0]) return Number(found.rows[0].id);
+  const shift = await findShiftById(shiftId, runner);
+  if (!shift) return null;
+  return upsertBackingPlanForShift(shiftId, shift.name, Number(shift.price ?? 0), runner);
 }
 
 export async function findBookingsByDate(date: string) {
